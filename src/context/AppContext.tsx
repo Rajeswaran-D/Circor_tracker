@@ -201,6 +201,19 @@ const getPurchaseOrderStatus = (productLines: PurchaseOrder['productLines'], isC
   return 'In Progress';
 };
 
+/**
+ * Recomputes a PO's rollup status after its lines changed without clobbering a
+ * terminal/pending state (Baseline Pending, Closed, Cancelled).
+ */
+const withRefreshedStatus = (po: PurchaseOrder, productLines: PurchaseOrder['productLines']): PurchaseOrder => ({
+  ...po,
+  productLines,
+  status: po.isCancelled || po.status === 'Cancelled' || po.isClosed || po.status === 'Baseline Pending'
+    ? po.status
+    : getPurchaseOrderStatus(productLines, po.isClosed),
+  lastUpdatedAt: new Date().toISOString()
+});
+
 /** Reads the stored risk thresholds so load-time recalculation matches the configured ones. */
 function loadConfigThresholds(): { atRisk: number; delayed: number } {
   try {
@@ -284,7 +297,9 @@ const normalizeMilestoneFlows = (orders: PurchaseOrder[], todayStr: string): Pur
   return {
     ...po,
     productLines: recalculatedLines,
-    status: po.isClosed ? 'Closed' : po.status === 'Baseline Pending' ? 'Baseline Pending' : getPurchaseOrderStatus(recalculatedLines, po.isClosed)
+    status: po.isCancelled || po.status === 'Cancelled'
+      ? 'Cancelled'
+      : po.isClosed ? 'Closed' : po.status === 'Baseline Pending' ? 'Baseline Pending' : getPurchaseOrderStatus(recalculatedLines, po.isClosed)
   };
 });
 
@@ -2050,23 +2065,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setPurchaseOrders(prev => prev.map(po => {
       if (po.id !== params.poId) return po;
-      return {
-        ...po,
-        productLines: po.productLines.map(line => {
-          if (line.id !== params.productLineId) return line;
-          const today = todayLocal();
-          const { atRiskThresholdDays, delayedThresholdDays } = config;
-          return recalculateProductLine({
-            ...line,
-            milestones: line.milestones.map(ms =>
-              ms.id !== params.milestoneId ? ms : {
-                ...ms,
-                subdivisions: [...(ms.subdivisions || []), newSub]
-              }
-            )
-          }, today, atRiskThresholdDays, delayedThresholdDays);
-        })
-      };
+      return withRefreshedStatus(po, po.productLines.map(line => {
+        if (line.id !== params.productLineId) return line;
+        const today = todayLocal();
+        const { atRiskThresholdDays, delayedThresholdDays } = config;
+        return recalculateProductLine({
+          ...line,
+          milestones: line.milestones.map(ms =>
+            ms.id !== params.milestoneId ? ms : {
+              ...ms,
+              subdivisions: [...(ms.subdivisions || []), newSub]
+            }
+          )
+        }, today, atRiskThresholdDays, delayedThresholdDays);
+      }));
     }));
     return { success: true };
   };
@@ -2083,25 +2095,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const now = new Date().toISOString();
     setPurchaseOrders(prev => prev.map(po => {
       if (po.id !== params.poId) return po;
-      return {
-        ...po,
-        productLines: po.productLines.map(line => {
-          if (line.id !== params.productLineId) return line;
-          const today = todayLocal();
-          const { atRiskThresholdDays, delayedThresholdDays } = config;
-          const updatedLine = {
-            ...line,
-            milestones: line.milestones.map(ms => {
-              if (ms.id !== params.milestoneId) return ms;
-              const updatedSubs = (ms.subdivisions || []).map(s =>
-                s.id !== params.subdivisionId ? s : { ...s, ...params.updates, updatedAt: now }
-              );
-              return { ...ms, subdivisions: updatedSubs };
-            })
-          };
-          return recalculateProductLine(updatedLine, today, atRiskThresholdDays, delayedThresholdDays);
-        })
-      };
+      return withRefreshedStatus(po, po.productLines.map(line => {
+        if (line.id !== params.productLineId) return line;
+        const today = todayLocal();
+        const { atRiskThresholdDays, delayedThresholdDays } = config;
+        const updatedLine = {
+          ...line,
+          milestones: line.milestones.map(ms => {
+            if (ms.id !== params.milestoneId) return ms;
+            const updatedSubs = (ms.subdivisions || []).map(s =>
+              s.id !== params.subdivisionId ? s : { ...s, ...params.updates, updatedAt: now }
+            );
+            return { ...ms, subdivisions: updatedSubs };
+          })
+        };
+        return recalculateProductLine(updatedLine, today, atRiskThresholdDays, delayedThresholdDays);
+      }));
     }));
     return { success: true };
   };
@@ -2115,24 +2124,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     setPurchaseOrders(prev => prev.map(po => {
       if (po.id !== params.poId) return po;
-      return {
-        ...po,
-        productLines: po.productLines.map(line => {
-          if (line.id !== params.productLineId) return line;
-          const today = todayLocal();
-          const { atRiskThresholdDays, delayedThresholdDays } = config;
-          return recalculateProductLine({
-            ...line,
-            milestones: line.milestones.map(ms => {
-              if (ms.id !== params.milestoneId) return ms;
-              return {
-                ...ms,
-                subdivisions: (ms.subdivisions || []).filter(s => s.id !== params.subdivisionId)
-              };
-            })
-          }, today, atRiskThresholdDays, delayedThresholdDays);
-        })
-      };
+      return withRefreshedStatus(po, po.productLines.map(line => {
+        if (line.id !== params.productLineId) return line;
+        const today = todayLocal();
+        const { atRiskThresholdDays, delayedThresholdDays } = config;
+        return recalculateProductLine({
+          ...line,
+          milestones: line.milestones.map(ms => {
+            if (ms.id !== params.milestoneId) return ms;
+            return {
+              ...ms,
+              subdivisions: (ms.subdivisions || []).filter(s => s.id !== params.subdivisionId)
+            };
+          })
+        }, today, atRiskThresholdDays, delayedThresholdDays);
+      }));
     }));
     return { success: true };
   };

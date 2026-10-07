@@ -27,7 +27,7 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
       statusTag: 'In Progress',
       progressPercent: 0,
       completedStagesCount: 0,
-      totalStagesCount: 11,
+      totalStagesCount: 14,
       isDelayed: false,
       delayDays: 0,
       productLineName: 'Manufacturing Line',

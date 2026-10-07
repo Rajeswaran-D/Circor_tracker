@@ -28,11 +28,30 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Network first strategy for API / dynamic state, falling back to cache
+  const { request } = event;
+  const url = new URL(request.url);
+
+  // Only handle same-origin GETs. Writes and the shared-state API must hit the
+  // network directly: answering them from the cache would serve stale data (or
+  // an undefined response on failure, which throws inside respondWith).
+  if (request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
+    return;
+  }
+
+  // Network first; keep a copy of every successful response so the app shell
+  // and its hashed JS/CSS bundles are available offline.
   event.respondWith(
-    fetch(event.request).catch(() => {
-      return caches.match(event.request);
-    })
+    fetch(request)
+      .then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        }
+        return response;
+      })
+      .catch(() =>
+        caches.match(request).then((cached) => cached || caches.match('/index.html'))
+      )
   );
 });
 
@@ -41,8 +60,8 @@ self.addEventListener('push', (event) => {
   const data = event.data ? event.data.json() : { title: 'CFT Project Alert', body: 'Milestone status update' };
   const options = {
     body: data.body,
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
+    icon: '/favicon.svg',
+    badge: '/favicon.svg',
     data: data.data || {}
   };
   event.waitUntil(self.registration.showNotification(data.title, options));
