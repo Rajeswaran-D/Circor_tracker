@@ -23,7 +23,7 @@ export const SystemBlueprintModal: React.FC<SystemBlueprintModalProps> = ({ isOp
             </div>
             <div>
               <h2 className="font-bold text-slate-900 text-base">Delivery Item #1: System Blueprint & Architecture</h2>
-              <p className="text-xs text-slate-500">Cicor Flow Technologies Project Tracker - Technical & Business Specification</p>
+              <p className="text-xs text-slate-500">Circor Flow Technologies Project Tracker - Technical & Business Specification</p>
             </div>
           </div>
           <button

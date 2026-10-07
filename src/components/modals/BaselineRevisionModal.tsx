@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, AlertTriangle, ShieldCheck, CheckCircle2, RefreshCw } from 'lucide-react';
+import { X, AlertTriangle, ShieldCheck, CheckCircle2, RefreshCw, Sparkles, Package } from 'lucide-react';
 import type { PurchaseOrder } from '../../types';
 import { addDays, todayLocal } from '../../services/calculationEngine';
 
@@ -21,9 +21,7 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
   onClose,
   po
 }) => {
-  const { addBaselineRevision, activeRole, canDo } = useApp();
-  // We allow submission for anyone; the backend enforces they only edit their owned milestones.
-  const isOwnerOrAdmin = activeRole === 'Project Management' || canDo('canApproveBaseline');
+  const { addBaselineRevision, activeRole } = useApp();
 
   const today = todayLocal();
 
@@ -31,8 +29,8 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
   const [flowMode, setFlowMode] = useState<'recommended' | 'custom'>('recommended');
   const [baselineStartDate, setBaselineStartDate] = useState<string>(today);
   const [durationChanges, setDurationChanges] = useState<{ [key: string]: number }>({});
+  const [masterDurations, setMasterDurations] = useState<{ [key: string]: number }>({});
   const [customFlows, setCustomFlows] = useState<Record<string, FlowMilestone[]>>({});
-  const [draggedMilestone, setDraggedMilestone] = useState<{ lineId: string; key: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -42,15 +40,21 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
     setFlowMode('recommended');
     setBaselineStartDate(initialStart);
     setError(null);
-    setDraggedMilestone(null);
 
     const initialMap: { [key: string]: number } = {};
+    const masterMap: { [key: string]: number } = {};
+
     po.productLines.forEach(line => {
       line.milestones.forEach(ms => {
         initialMap[`${line.id}_${ms.key}`] = ms.committedDurationDays;
+        if (masterMap[ms.key] === undefined) {
+          masterMap[ms.key] = ms.committedDurationDays;
+        }
       });
     });
+
     setDurationChanges(initialMap);
+    setMasterDurations(masterMap);
 
     const initialFlows: Record<string, FlowMilestone[]> = {};
     po.productLines.forEach(line => {
@@ -65,55 +69,35 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Determine if this is the initial baseline approval or a re-revision
   const isInitialApproval = po.status === 'Baseline Pending';
-  // Actual shop-floor execution has started if any downstream stage (stageOrder > 2) has recorded actual start/end dates
   const flowAlreadyStarted = !isInitialApproval && po.productLines.some(line =>
     line.milestones.some(ms => ms.stageOrder > 2 && Boolean(ms.actualStartDate || ms.actualEndDate))
   );
 
-  const handleDurationChange = (lineId: string, milestoneKey: string, val: number) => {
-    setDurationChanges(prev => ({
+  const handleMasterDurationChange = (milestoneKey: string, val: number) => {
+    const clampedVal = Math.max(1, val);
+    setMasterDurations(prev => ({
       ...prev,
-      [`${lineId}_${milestoneKey}`]: Math.max(1, val)
+      [milestoneKey]: clampedVal
     }));
-  };
 
-  const updateCustomMilestone = (lineId: string, key: string, changes: Partial<FlowMilestone>) => {
-    setCustomFlows(prev => ({
-      ...prev,
-      [lineId]: (prev[lineId] || []).map(ms => ms.key === key ? { ...ms, ...changes } : ms)
-    }));
-  };
-
-  const addCustomMilestone = (lineId: string) => {
-    const key = `custom_${lineId}_${Date.now()}`;
-    setCustomFlows(prev => ({
-      ...prev,
-      [lineId]: [...(prev[lineId] || []), { key, name: 'New milestone', durationDays: 1 }]
-    }));
-  };
-
-  const deleteCustomMilestone = (lineId: string, key: string) => {
-    setCustomFlows(prev => ({
-      ...prev,
-      [lineId]: (prev[lineId] || []).filter(ms => ms.key !== key)
-    }));
-  };
-
-  const reorderCustomMilestone = (lineId: string, targetKey: string) => {
-    if (!draggedMilestone || draggedMilestone.lineId !== lineId || draggedMilestone.key === targetKey) return;
-
-    setCustomFlows(prev => {
-      const flow = [...(prev[lineId] || [])];
-      const sourceIndex = flow.findIndex(ms => ms.key === draggedMilestone.key);
-      const targetIndex = flow.findIndex(ms => ms.key === targetKey);
-      if (sourceIndex < 0 || targetIndex < 0) return prev;
-      const [moved] = flow.splice(sourceIndex, 1);
-      flow.splice(targetIndex, 0, moved);
-      return { ...prev, [lineId]: flow };
+    // Cascade to all product lines in the PO
+    setDurationChanges(prev => {
+      const next = { ...prev };
+      po.productLines.forEach(line => {
+        next[`${line.id}_${milestoneKey}`] = clampedVal;
+      });
+      return next;
     });
-    setDraggedMilestone(null);
+
+    // Also update customFlows if in custom flow
+    setCustomFlows(prev => {
+      const next: Record<string, FlowMilestone[]> = {};
+      Object.keys(prev).forEach(lineId => {
+        next[lineId] = prev[lineId].map(ms => ms.key === milestoneKey ? { ...ms, durationDays: clampedVal } : ms);
+      });
+      return next;
+    });
   };
 
   const nextRevNum = po.revisions.length;
@@ -127,7 +111,6 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
       return;
     }
 
-    // Custom flows must stay valid: at least one milestone per line, durations >= 1 day.
     if (flowMode === 'custom') {
       const emptyLine = po.productLines.find(line => (customFlows[line.id] || []).length === 0);
       if (emptyLine) {
@@ -143,7 +126,6 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
       }
     }
 
-    // Build list of changed durations (empty is allowed — locking Rev 0 without changes)
     const changesList: { lineId: string; milestoneKey: string; newDuration: number }[] = [];
 
     po.productLines.forEach(line => {
@@ -162,7 +144,7 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
 
     const res = addBaselineRevision({
       poId: po.id,
-      reason: reason.trim() || (isInitialApproval ? 'Baseline reviewed and approved.' : `Baseline re-revised (Rev ${nextRevNum}).`),
+      reason: reason.trim() || (isInitialApproval ? 'Single Master Baseline reviewed and approved for all products.' : `Master Baseline re-revised (Rev ${nextRevNum}).`),
       docRef: `BL-REV-${nextRevNum}-${today.replace(/-/g, '')}`,
       user: `${activeRole} User`,
       baselineStartDate,
@@ -179,293 +161,296 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
     }
   };
 
-  const getSchedule = (line: PurchaseOrder['productLines'][number]) => {
-    const flow = flowMode === 'custom'
-      ? customFlows[line.id] || []
-      : line.milestones.map(ms => ({ key: ms.key, name: ms.name, durationDays: durationChanges[`${line.id}_${ms.key}`] || ms.committedDurationDays }));
-    let nextStart = baselineStartDate || line.milestones[0]?.committedBaselineStartDate || today;
+  // Master representative milestone list (taken from line 1 or longest line)
+  const masterMilestones = po.productLines[0]?.milestones || [];
 
-    return flow.map((milestone, index) => {
-      const startDate = nextStart;
-      const endDate = addDays(startDate, Math.max(1, milestone.durationDays));
-      nextStart = endDate;
-      return { ...milestone, index, startDate, endDate };
+  // Calculate master schedule
+  let masterRunningDate = baselineStartDate || po.poDate || today;
+  const masterSchedule = masterMilestones.map((ms, index) => {
+    const duration = masterDurations[ms.key] || ms.committedDurationDays;
+    const startDate = masterRunningDate;
+    const endDate = addDays(startDate, Math.max(1, duration));
+    masterRunningDate = endDate;
+    return { ...ms, index, durationDays: duration, startDate, endDate };
+  });
+  const masterCalculatedDeliveryDate = masterSchedule[masterSchedule.length - 1]?.endDate || po.committedDeliveryDate;
+
+  // Extract all historical delay records across all products in the PO for reference
+  const netPoDelay = Math.max(0, ...po.productLines.map(l => l.overallVarianceDays || 0));
+  const allPoDelays: { stageOrder: number; stageName: string; varianceDays: number; delayReason?: string }[] = [];
+  po.productLines.forEach(line => {
+    line.milestones.forEach(m => {
+      if ((typeof m.varianceDays === 'number' && m.varianceDays !== 0) || (m.delayReason && !m.delayReason.startsWith('Cascaded'))) {
+        if (!allPoDelays.some(existing => existing.stageOrder === m.stageOrder && existing.delayReason === m.delayReason)) {
+          allPoDelays.push({
+            stageOrder: m.stageOrder,
+            stageName: m.name,
+            varianceDays: m.varianceDays || 0,
+            delayReason: m.delayReason
+          });
+        }
+      }
     });
-  };
+  });
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-      <div className="bg-white border border-slate-200 rounded-xl w-full max-w-3xl shadow-2xl flex flex-col max-h-[85vh] text-slate-800">
+      <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[90vh] text-slate-800 overflow-hidden">
         
-        {/* Header */}
-        <div className="bg-slate-50 px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+        {/* Modern Header */}
+        <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-950 p-5 text-white flex items-center justify-between border-b border-slate-700">
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="font-bold text-slate-900 text-base">
-                {isInitialApproval ? 'Approve Initial Baseline' : `Issue Baseline Re-Revision (Rev ${nextRevNum})`}
-              </h2>
-              <span className={`px-2.5 py-0.5 rounded-full font-mono text-[10px] font-bold border ${
-                isInitialApproval
-                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                  : 'bg-amber-50 text-amber-800 border-amber-200'
-              }`}>
-                {isInitialApproval ? 'INITIAL APPROVAL' : 'RE-BASELINE'}
+              <span className="px-2.5 py-0.5 rounded-full font-mono text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                {isInitialApproval ? 'INITIAL BASELINE COMMITMENT' : `RE-BASELINE REV ${nextRevNum}`}
               </span>
-              {flowAlreadyStarted && (
-                <span className="px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-800 font-mono text-[10px] font-bold border border-rose-200">
-                  FLOW STARTED — READ ONLY
-                </span>
-              )}
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-white/10 text-slate-200">
+                Unified Order Schedule ({po.productLines.length} Products)
+              </span>
             </div>
-            <p className="text-xs text-slate-500 mt-0.5">PO: {po.poNumber} | Customer: {po.customerName}</p>
+            <h2 className="font-extrabold text-white text-lg mt-1 tracking-tight">
+              {isInitialApproval ? 'Single Master Baseline Planning' : `Issue Baseline Revision (Rev ${nextRevNum})`}
+            </h2>
+            <p className="text-xs text-slate-300 mt-0.5">PO: <strong className="font-mono text-cyan-300">{po.poNumber}</strong> | Customer: <strong className="text-white">{po.customerName}</strong></p>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 cursor-pointer">
+          <button onClick={onClose} className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 cursor-pointer transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content Body */}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-4 text-xs">
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-6 space-y-5 text-xs">
           {error && (
-            <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg flex items-center gap-2">
+            <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
               <span>{error}</span>
             </div>
           )}
 
-          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg flex justify-between items-center text-xs">
-            <div>
-              <span className="text-slate-500">Current Revision:</span>
-              <strong className="text-emerald-800 font-mono ml-1">
-                {isInitialApproval ? 'None (Pending)' : `Rev ${po.revisions.length - 1}`}
-              </strong>
-            </div>
-            <div>
-              <span className="text-slate-500">Approver Role:</span> <strong className="text-emerald-700">{activeRole}</strong>
-            </div>
-          </div>
-
-          {flowAlreadyStarted && (
-            <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-3 text-xs text-rose-800">
-              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
+          {/* Unified Scope Info Banner */}
+          <div className="bg-cyan-50/70 border border-cyan-200 p-3.5 rounded-xl flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <Sparkles className="w-4 h-4 text-cyan-700 shrink-0" />
               <div>
-                <p className="font-bold">Re-baseline not available — actual work has already started.</p>
-                <p className="mt-0.5 text-rose-700">One or more milestones have actual start/end dates recorded. The approved baseline schedule is now locked. Use the production modules to track progress against the existing plan.</p>
+                <div className="font-bold text-cyan-950 text-xs">Single Order Master Baseline</div>
+                <div className="text-[11px] text-cyan-800">One synchronized 14-stage schedule automatically controls all {po.productLines.length} product lines in this order.</div>
               </div>
             </div>
-          )}
+            <span className="text-[10px] font-mono font-bold px-2.5 py-1 bg-white text-cyan-900 border border-cyan-300 rounded-lg shadow-2xs">
+              All {po.productLines.length} Products Linked
+            </span>
+          </div>
 
-          {!isInitialApproval && !flowAlreadyStarted && (
-            <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3 text-xs text-amber-800">
-              <RefreshCw className="w-4 h-4 shrink-0 mt-0.5 text-amber-700" />
-              <div>
-                <p className="font-bold">Re-Baseline Revision — Rev {nextRevNum}</p>
-                <p className="mt-0.5">You are modifying the approved baseline schedule. This will update all committed dates. Provide a clear negotiation reason below.</p>
+          {/* PO Parameters */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50/60 p-4 rounded-xl border border-slate-200">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1 text-[11px]">
+                Baseline Planned Start Date
+              </label>
+              <input
+                type="date"
+                value={baselineStartDate}
+                disabled={flowAlreadyStarted}
+                onChange={(e) => setBaselineStartDate(e.target.value)}
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono text-slate-800 focus:outline-none focus:border-cyan-600 font-bold"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1 text-[11px]">
+                Calculated Final Delivery
+              </label>
+              <div className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono text-cyan-900 font-extrabold flex items-center justify-between">
+                <span>{masterCalculatedDeliveryDate}</span>
+                <span className="text-[10px] text-slate-500 font-normal">PO: {po.committedDeliveryDate}</span>
               </div>
             </div>
-          )}
 
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">
-              Baseline Start Date
-            </label>
-            <input
-              type="date"
-              value={baselineStartDate}
-              onChange={(e) => setBaselineStartDate(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-800 focus:outline-none focus:border-emerald-600"
-            />
-          </div>
-
-          {/* Reason */}
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">
-              {isInitialApproval ? 'Notes' : 'Re-Baseline Negotiation Reason'}
-              {!isInitialApproval && <span className="text-rose-600 ml-1">*</span>}
-              {isInitialApproval && <span className="text-slate-400 font-normal"> (Optional)</span>}
-            </label>
-            <input
-              type="text"
-              disabled={flowAlreadyStarted}
-              placeholder={isInitialApproval ? 'e.g. Baseline reviewed and confirmed with customer' : 'e.g. Customer approved scope extension — engineering review required'}
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:border-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <div className="font-semibold text-slate-700">Milestone Flow</div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setFlowMode('recommended')}
-                className={`px-3 py-2 rounded-lg border text-left text-xs font-semibold cursor-pointer ${flowMode === 'recommended' ? 'bg-emerald-50 border-emerald-500 text-emerald-800' : 'bg-white border-slate-200 text-slate-600'}`}
-              >
-                Recommended Flow
-                <span className="block text-[10px] font-normal text-slate-500 mt-0.5">Use the product schedule</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setFlowMode('custom')}
-                className={`px-3 py-2 rounded-lg border text-left text-xs font-semibold cursor-pointer ${flowMode === 'custom' ? 'bg-emerald-50 border-emerald-500 text-emerald-800' : 'bg-white border-slate-200 text-slate-600'}`}
-              >
-                Custom Flow
-                <span className="block text-[10px] font-normal text-slate-500 mt-0.5">Edit or add milestones</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Product Lines & Milestones Duration Editor */}
-          <div className="space-y-4">
-            <h4 className="font-bold text-emerald-800 uppercase tracking-wider text-[11px]">
-              Negotiated Milestone Durations (Days)
-            </h4>
-
-            {po.productLines.map(line => (
-              <div key={line.id} className="border border-slate-200 rounded-lg bg-slate-50 overflow-hidden">
-                <div className="bg-slate-100 px-4 py-2.5 border-b border-slate-200 font-bold text-slate-900 flex justify-between">
-                  <span>{line.lineNumber}: {line.productName}</span>
-                  <span className="text-[10px] text-slate-500 font-normal">Type: {line.designType}</span>
-                </div>
-
-                <div className="p-4 divide-y divide-slate-200">
-                  {(flowMode === 'custom' ? customFlows[line.id] || [] : line.milestones.map(ms => ({ key: ms.key, name: ms.name, durationDays: ms.committedDurationDays }))).map(ms => {
-                    const originalMs = line.milestones.find(item => item.key === ms.key);
-                    const key = `${line.id}_${ms.key}`;
-                    const currentDur = flowMode === 'custom' ? ms.durationDays : (durationChanges[key] || ms.durationDays);
-                    const diff = originalMs ? currentDur - originalMs.committedDurationDays : currentDur;
-
-                    return (
-                      <div
-                        key={ms.key}
-                        draggable={flowMode === 'custom'}
-                        onDragStart={() => setDraggedMilestone({ lineId: line.id, key: ms.key })}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={() => reorderCustomMilestone(line.id, ms.key)}
-                        className={`py-2.5 flex items-center justify-between gap-3 text-xs ${flowMode === 'custom' ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                      >
-                        <div className="flex-1">
-                          {flowMode === 'custom' ? (
-                            <input
-                              value={ms.name}
-                              onChange={(e) => updateCustomMilestone(line.id, ms.key, { name: e.target.value })}
-                              className="w-full px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800"
-                            />
-                          ) : (
-                            <span className="font-semibold text-slate-800">{ms.name}</span>
-                          )}
-                          <span className="text-[10px] text-slate-500 ml-2">Recommended: {originalMs?.committedDurationDays || ms.durationDays}d</span>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          {flowMode === 'custom' && (
-                            <button
-                              type="button"
-                              onClick={() => deleteCustomMilestone(line.id, ms.key)}
-                              title="Delete milestone"
-                              className="p-1 text-slate-400 hover:text-rose-700 hover:bg-rose-50 rounded cursor-pointer"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                          <span className="text-[11px] text-slate-500 font-mono">Duration:</span>
-                          <input
-                            type="number"
-                            min="1"
-                            max="365"
-                            value={currentDur}
-                            disabled={flowMode === 'recommended'}
-                            onChange={(e) => flowMode === 'custom'
-                              ? updateCustomMilestone(line.id, ms.key, { durationDays: parseInt(e.target.value) || 1 })
-                              : handleDurationChange(line.id, ms.key, parseInt(e.target.value) || 1)}
-                            className="w-16 px-2 py-1 bg-white border border-slate-200 rounded-lg text-center text-xs font-mono text-emerald-800 font-bold"
-                          />
-                          <span className={`w-12 text-center text-[11px] font-mono font-bold ${
-                            diff > 0 ? 'text-rose-700' : diff < 0 ? 'text-emerald-700' : 'text-slate-400'
-                          }`}>
-                            {diff > 0 ? `+${diff}d` : diff < 0 ? `${diff}d` : '0d'}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                {flowMode === 'custom' && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-bold text-slate-700 text-[11px]">
+                  {isInitialApproval ? 'Approval Notes' : 'Re-Baseline Reason'}
+                  {!isInitialApproval && <span className="text-rose-600 ml-1">*</span>}
+                </label>
+                {!isInitialApproval && (allPoDelays.length > 0 || netPoDelay > 0) && (
                   <button
                     type="button"
-                    onClick={() => addCustomMilestone(line.id)}
-                    className="w-full px-4 py-2 border-t border-slate-200 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 cursor-pointer"
+                    onClick={() => {
+                      const breakdown = allPoDelays.map(d => `${d.stageName} (${d.varianceDays > 0 ? `+${d.varianceDays}d` : `${d.varianceDays}d`}${d.delayReason ? `: ${d.delayReason}` : ''})`).join('; ');
+                      const sum = `Net order delay: +${netPoDelay}d${breakdown ? ` [${breakdown}]` : ''}`;
+                      setReason(prev => prev ? `${prev} | ${sum}` : sum);
+                    }}
+                    className="text-[10px] font-bold text-rose-700 hover:text-rose-900 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2 py-0.5 rounded cursor-pointer transition-colors"
                   >
-                    + Add milestone
+                    Append Delays (+{netPoDelay}d)
                   </button>
                 )}
-
-                <div className="border-t border-slate-200 bg-white p-4 space-y-2">
-                  <h5 className="font-bold text-slate-700 text-[11px] uppercase tracking-wider">Calculated Schedule</h5>
-                  <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-4 gap-y-2 text-[11px]">
-                    <div className="font-semibold text-slate-500">Milestone</div>
-                    <div className="font-semibold text-slate-500">Duration</div>
-                    <div className="font-semibold text-slate-500">Start</div>
-                    <div className="font-semibold text-slate-500">End</div>
-                    {getSchedule(line).map(milestone => (
-                      <React.Fragment key={`schedule-${milestone.key}`}>
-                        <div className="text-slate-700 truncate">{milestone.index + 1}. {milestone.name}</div>
-                        <div className="font-mono text-slate-600">{milestone.durationDays}d</div>
-                        <div className="font-mono text-slate-600">{milestone.startDate}</div>
-                        <div className="font-mono font-semibold text-emerald-700">{milestone.endDate}</div>
-                      </React.Fragment>
-                    ))}
-                  </div>
-                </div>
               </div>
-            ))}
+              <input
+                type="text"
+                disabled={flowAlreadyStarted}
+                placeholder={isInitialApproval ? 'e.g. Master baseline reviewed & agreed' : 'e.g. Approved scope extension'}
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:border-cyan-600 disabled:opacity-50"
+              />
+              {!isInitialApproval && allPoDelays.length > 0 && (
+                <div className="mt-1.5 p-2 bg-rose-50/60 border border-rose-100 rounded-lg text-[10px] text-rose-800 space-y-0.5">
+                  <div className="font-semibold text-rose-950 flex items-center gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                    <span>Recorded milestone delays / recoveries across order:</span>
+                  </div>
+                  {allPoDelays.slice(0, 3).map((d, i) => (
+                    <div key={i} className="truncate">• Stage {d.stageOrder}. {d.stageName}: <strong className={d.varianceDays > 0 ? "text-rose-700" : "text-emerald-700"}>{d.varianceDays > 0 ? `+${d.varianceDays}d` : `${d.varianceDays}d`}</strong> {d.delayReason ? `("${d.delayReason}")` : d.varianceDays < 0 ? '(Time recovered)' : ''}</div>
+                  ))}
+                  {allPoDelays.length > 3 && (
+                    <div className="text-[9px] text-rose-600 italic">+ {allPoDelays.length - 3} more stage event(s)</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* MASTER BASELINE VIEW (CLEAN & NON-CLUMSY) */}
+          <div className="space-y-4">
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+              <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-slate-900 text-xs flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-cyan-600" /> Master 14-Stage Duration Plan (Applies to All {po.productLines.length} Products)
+                  </h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5">Edit stage durations below. Dates will automatically chain and synchronize across all products.</p>
+                </div>
+                <span className="text-xs font-mono font-bold text-cyan-800 bg-cyan-50 border border-cyan-200 px-2.5 py-1 rounded-lg">
+                  Total: {masterSchedule.reduce((acc, m) => acc + m.durationDays, 0)} Days
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50/50 border-b border-slate-200 text-slate-500 font-bold uppercase text-[10px]">
+                      <th className="py-2.5 px-4 w-12 text-center">#</th>
+                      <th className="py-2.5 px-4">Stage Name</th>
+                      <th className="py-2.5 px-4 text-center w-36">Duration (Days)</th>
+                      <th className="py-2.5 px-4">Planned Start</th>
+                      <th className="py-2.5 px-4">Planned End</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-800">
+                    {masterSchedule.map((ms, idx) => {
+                      const originalMs = masterMilestones.find(item => item.key === ms.key);
+                      const currentDur = masterDurations[ms.key] || ms.committedDurationDays;
+                      const diff = originalMs ? currentDur - originalMs.committedDurationDays : 0;
+
+                      return (
+                        <tr key={ms.key} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="py-2.5 px-4 text-center font-mono font-bold text-slate-400">
+                            {idx + 1}
+                          </td>
+                          <td className="py-2.5 px-4 font-semibold text-slate-800">
+                            {ms.name}
+                          </td>
+                          <td className="py-2.5 px-4 text-center">
+                            <div className="flex items-center justify-center gap-2">
+                              <input
+                                type="number"
+                                min="1"
+                                max="365"
+                                disabled={flowAlreadyStarted}
+                                value={currentDur}
+                                onChange={(e) => handleMasterDurationChange(ms.key, parseInt(e.target.value) || 1)}
+                                className="w-16 px-2 py-1 bg-slate-50 border border-slate-300 rounded-lg text-center text-xs font-mono text-cyan-900 font-extrabold focus:bg-white focus:outline-none focus:border-cyan-600"
+                              />
+                              {diff !== 0 && (
+                                <span className={`text-[10px] font-mono font-bold ${diff > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                  {diff > 0 ? `+${diff}d` : `${diff}d`}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-4 font-mono text-slate-600 text-[11px]">
+                            {ms.startDate}
+                          </td>
+                          <td className="py-2.5 px-4 font-mono font-bold text-emerald-700 text-[11px]">
+                            {ms.endDate}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* SYNCHRONIZED PRODUCTS SUMMARY CARD */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                <div className="font-bold text-slate-900 text-xs flex items-center gap-2">
+                  <Package className="w-4 h-4 text-emerald-700" />
+                  Synchronized Products Overview ({po.productLines.length} Product Lines)
+                </div>
+                <span className="text-[11px] font-mono text-emerald-800 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                  All Products Synced to Master Baseline
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                {po.productLines.map(line => (
+                  <div key={line.id} className="bg-white p-3 rounded-lg border border-slate-200 space-y-1 shadow-2xs">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-slate-900 truncate">{line.lineNumber}: {line.productName}</span>
+                      <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-purple-50 text-purple-800 border border-purple-200">
+                        {line.designType}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 font-mono flex items-center justify-between pt-1">
+                      <span>Qty: <strong>{line.qty} Pcs</strong></span>
+                      <span className="text-emerald-800 font-bold">Delivery: {masterCalculatedDeliveryDate}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
 
           {!flowAlreadyStarted && (
-            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-lg text-[11px] text-slate-700 flex items-center gap-2">
+            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-[11px] text-slate-700 flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
               <span>
                 {isInitialApproval
-                  ? `Approving will lock Rev ${nextRevNum} and release this order to all shop-floor modules.`
-                  : `Saving will lock Re-Baseline Rev ${nextRevNum} and recalculate all committed dates.`
+                  ? `Approving this Master Baseline locks Rev ${nextRevNum} and releases all ${po.productLines.length} product lines to the stage execution modules.`
+                  : `Saving will lock Re-Baseline Rev ${nextRevNum} and synchronize all committed milestone dates.`
                 }
               </span>
             </div>
           )}
 
           {/* Footer Actions */}
-          <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
+          <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
             <button
               type="button"
               onClick={onClose}
-              className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium cursor-pointer"
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
             >
               {flowAlreadyStarted ? 'Close' : 'Cancel'}
             </button>
             {!flowAlreadyStarted && (
               <button
                 type="submit"
-                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
+                className="px-5 py-2 bg-cyan-800 hover:bg-cyan-900 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
               >
                 {isInitialApproval ? (
-                  <><CheckCircle2 className="w-3.5 h-3.5 text-emerald-200" /> Approve Baseline & Start Progress</>
+                  <><CheckCircle2 className="w-4 h-4 text-cyan-200" /> Lock Master Baseline & Release Order</>
                 ) : (
-                  <><RefreshCw className="w-3.5 h-3.5 text-emerald-200" /> Save Re-Baseline Rev {nextRevNum}</>
+                  <><RefreshCw className="w-4 h-4 text-cyan-200" /> Save Master Re-Baseline Rev {nextRevNum}</>
                 )}
               </button>
             )}
-            {!isOwnerOrAdmin && !flowAlreadyStarted && (
-              <div className="flex items-center gap-2 px-4 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs text-slate-500">
-                <ShieldCheck className="w-3.5 h-3.5 text-slate-400" />
-                You can only revise durations for your assigned stages.
-              </div>
-            )}
           </div>
-
         </form>
-
       </div>
     </div>
   );
 };
+

@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { X, AlertTriangle, ShieldCheck, CheckCircle2 } from 'lucide-react';
 import type { Milestone, ProductLine, PurchaseOrder } from '../../types';
 import { isMilestoneOwnedByRole } from '../../types';
-import { getDaysDifference, todayLocal } from '../../services/calculationEngine';
+import { getDaysDifference, todayLocal, mergeDelayReason } from '../../services/calculationEngine';
 
 interface ManualInputModalProps {
   isOpen: boolean;
@@ -54,7 +54,7 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
   if (!isOpen) return null;
 
   const isRoleAuthorized = isMilestoneOwnedByRole(milestone.key, activeRole);
-  const isPreviousDone = !previousMs || previousMs.status === 'Completed';
+  const isPreviousDone = !previousMs || previousMs.status === 'Completed' || Boolean(previousMs.actualEndDate) || previousMs.completionPct === 100;
 
   const comparisonDate = eventType === 'start' ? milestone.committedBaselineStartDate : milestone.committedBaselineEndDate;
   const isDelayedDate = eventDate > comparisonDate;
@@ -77,8 +77,8 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
 
     const effectiveDocRef = `WO-AUTO-${eventDate.replace(/-/g, '')}`;
 
-    if (eventType === 'start' && previousMsEnd && eventDate < previousMsEnd) {
-      setErrorMessage(`Start date cannot be earlier than previous milestone's end date (${previousMsEnd}).`);
+    if (eventType === 'start' && previousMsActualEnd && eventDate < previousMsActualEnd) {
+      setErrorMessage(`Start date cannot be earlier than previous milestone's actual end date (${previousMsActualEnd}).`);
       return;
     }
 
@@ -224,21 +224,70 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
                 <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
                 <span>Delay Detected at <strong>{milestone.name}</strong>: +{delayDaysCount} days delay formed.</span>
               </div>
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-slate-700 font-semibold">
-                    Actual Reason for Delay <span className="text-rose-600">*</span>
-                  </label>
-                  {previousMs && (
-                    <button
-                      type="button"
-                      onClick={() => setCustomDelayReason(`Delay cascaded from previous stage: ${previousMs.name}${previousMs.delayReason ? ` (${previousMs.delayReason})` : ''}`)}
-                      className="text-[10px] text-emerald-800 hover:text-emerald-950 font-bold underline cursor-pointer"
-                    >
-                      ⚡ Use Previous Milestone Delay
-                    </button>
-                  )}
-                </div>
+              <div className="space-y-2">
+                {(() => {
+                  const prevEffectiveEnd = previousMs ? (previousMs.actualEndDate || previousMs.forecastEndDate) : undefined;
+                  const prevBaselineEnd = previousMs?.committedBaselineEndDate;
+                  const netInheritedDelay = prevEffectiveEnd && prevBaselineEnd
+                    ? Math.max(0, getDaysDifference(prevBaselineEnd, prevEffectiveEnd))
+                    : (previousMs && typeof previousMs.varianceDays === 'number' && previousMs.varianceDays > 0 ? previousMs.varianceDays : 0);
+
+                  const prevMilestones = (productLine.milestones || []).slice(0, msIndex);
+                  const prevDelaysList = prevMilestones
+                    .map((m: Milestone) => {
+                      let days = 0;
+                      if (m.actualEndDate && m.committedBaselineEndDate) {
+                        days = Math.max(0, getDaysDifference(m.committedBaselineEndDate, m.actualEndDate));
+                      } else if (typeof m.varianceDays === 'number' && m.varianceDays > 0) {
+                        days = m.varianceDays;
+                      }
+                      return { ...m, calculatedDelayDays: days };
+                    })
+                    .filter(m => m.calculatedDelayDays > 0 || (Boolean(m.delayReason) && !m.delayReason?.startsWith('Cascaded') && !m.delayReason?.startsWith('Inherited')));
+
+                  return (
+                    <>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-slate-700 font-semibold text-xs">
+                          Actual Reason for Delay <span className="text-rose-600">*</span>
+                        </label>
+                        <div className="flex items-center gap-1.5">
+                          {netInheritedDelay > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const breakdown = prevDelaysList.map(m => `${m.name} (+${m.calculatedDelayDays}d${m.delayReason ? `: ${m.delayReason}` : ''})`).join('; ');
+                                const sum = `Inherited delay from preceding stages (+${netInheritedDelay}d)${breakdown ? ` [${breakdown}]` : ''}`;
+                                setCustomDelayReason(prev => mergeDelayReason(prev, sum));
+                              }}
+                              className="text-[10px] text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 font-bold px-2 py-0.5 rounded cursor-pointer shadow-2xs"
+                            >
+                              Append Previous Delays (+{netInheritedDelay}d)
+                            </button>
+                          )}
+                          {previousMs && (
+                            <button
+                              type="button"
+                              onClick={() => setCustomDelayReason(`Delay cascaded from previous stage: ${previousMs.name}${previousMs.delayReason ? ` (${previousMs.delayReason})` : ''}`)}
+                              className="text-[10px] text-slate-600 hover:text-slate-900 underline font-medium cursor-pointer"
+                            >
+                              Preceding Stage
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {netInheritedDelay > 0 && prevDelaysList.length > 0 && (
+                        <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg space-y-0.5 text-[10px] font-mono text-amber-900">
+                          <div className="font-bold text-amber-950">Preceding Stage Delays:</div>
+                          {prevDelaysList.map((m, i) => (
+                            <div key={i} className="truncate">• Stage {m.stageOrder}. {m.name}: <strong className="text-rose-700">+{m.calculatedDelayDays}d</strong> {m.delayReason ? `("${m.delayReason}")` : m.delayCategory ? `(${m.delayCategory})` : ''}</div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
                 <input
                   type="text"
                   placeholder="Explain reason for delay (e.g. Sub-tier casting delay / NDT test re-inspection)..."

@@ -113,13 +113,12 @@ export function milestoneEffectiveEnd(ms?: Milestone | null): string | undefined
  * end still in the future must NEVER be used as a floor: doing so leaves the
  * picker with no selectable date and makes the stage impossible to record.
  */
-export function chainAnchorDate(milestones: Milestone[], index: number, todayStr: string): string | undefined {
+export function chainAnchorDate(milestones: Milestone[], index: number, _todayStr?: string): string | undefined {
   if (index <= 0) return undefined;
   const prev = milestones[index - 1];
   if (!prev) return undefined;
   if (prev.actualEndDate) return prev.actualEndDate;
-  const planned = prev.forecastEndDate || prev.committedBaselineEndDate;
-  return planned && planned <= todayStr ? planned : undefined;
+  return undefined;
 }
 
 export interface EventDateValidation {
@@ -148,7 +147,8 @@ export function validateEventDate(params: {
 
   if (index > 0) {
     const prev = milestones[index - 1];
-    if (prev.status !== 'Completed') {
+    const isPrevComplete = prev.status === 'Completed' || Boolean(prev.actualEndDate) || prev.completionPct === 100;
+    if (!isPrevComplete) {
       return { ok: false, error: `Dependency Error: Cannot start or complete until the previous milestone (${prev.name}) is Completed.` };
     }
   }
@@ -159,7 +159,7 @@ export function validateEventDate(params: {
     if (anchor && eventDate < anchor) {
       return {
         ok: false,
-        error: `Date Sync Error: Start date (${eventDate}) cannot be earlier than the previous milestone's end date (${anchor}).`
+        error: `Date Sync Error: Start date (${eventDate}) cannot be earlier than the previous milestone's actual end date (${anchor}).`
       };
     }
     return { ok: true };
@@ -286,7 +286,8 @@ export function normalizeMaterialDates(materials: MaterialItem[], _todayStr: str
  */
 export function canProductionStart(productLine: ProductLine): { allowed: boolean; reason?: string } {
   const designMs = productLine.milestones.find(m => m.key === 'bom_release' || m.key === 'design_approval');
-  if (designMs && designMs.status !== 'Completed') {
+  const isDesignDone = !designMs || designMs.status === 'Completed' || Boolean(designMs.actualEndDate) || designMs.completionPct === 100;
+  if (designMs && !isDesignDone) {
     return {
       allowed: false,
       reason: `Design & BOM stage '${designMs.name}' is not yet completed/approved (BOM release approval required).`
@@ -477,13 +478,12 @@ export function recalculateProductLine(
 
   let currentForecastStart = milestones[0].committedBaselineStartDate || todayStr;
 
-  // The longest outstanding material arrival drives material receipt.
-  let maxMaterialExpectedDate = currentForecastStart;
+  // The longest outstanding or actual received material arrival drives material receipt.
+  let maxMaterialArrivalDate = currentForecastStart;
   healedLine.materials.forEach(mat => {
-    if (mat.receivedDate) return;
-    const expected = mat.expectedDate ? clampDateMin(mat.expectedDate, todayStr) : undefined;
-    if (expected && expected > maxMaterialExpectedDate) {
-      maxMaterialExpectedDate = expected;
+    const arrival = mat.receivedDate || (mat.expectedDate ? clampDateMin(mat.expectedDate, todayStr) : undefined);
+    if (arrival && arrival > maxMaterialArrivalDate) {
+      maxMaterialArrivalDate = arrival;
     }
   });
 
@@ -502,8 +502,8 @@ export function recalculateProductLine(
     }
 
     if (ms.key === 'material_receipt' || ms.key === 'raw_material') {
-      if (maxMaterialExpectedDate > forecastStart) {
-        forecastStart = maxMaterialExpectedDate;
+      if (maxMaterialArrivalDate > forecastStart) {
+        forecastStart = maxMaterialArrivalDate;
       }
     }
 
@@ -540,16 +540,18 @@ export function recalculateProductLine(
       // Actively started milestones are in progress/execution; delays are tracked in varianceDays / delayReason
       if (varianceDays > atRiskThreshold && varianceDays <= delayedThreshold) {
         status = 'At Risk';
+      } else if (varianceDays > delayedThreshold) {
+        status = 'Delayed';
       } else {
         status = 'In Progress';
       }
-    } else if (ms.status === 'Delayed' || !!ms.delayReason || varianceDays > 0) {
+    } else if (varianceDays > delayedThreshold) {
       status = 'Delayed';
+    } else if (varianceDays > atRiskThreshold) {
+      status = 'At Risk';
     } else {
       if (allSubsDone) {
         status = 'In Progress';
-      } else if (varianceDays > atRiskThreshold) {
-        status = 'At Risk';
       } else {
         status = 'Not Started';
       }
@@ -569,21 +571,31 @@ export function recalculateProductLine(
     });
   }
 
-  const maxVariance = Math.max(...updatedMilestones.map(m => m.varianceDays), 0);
+  // The overall line variance is governed by the final milestone delivery variance
+  // If an upcoming milestone finishes early and recovers the schedule, final variance will correctly reflect the net delay or 0
+  const finalMilestone = updatedMilestones[updatedMilestones.length - 1];
+  const finalVariance = finalMilestone ? finalMilestone.varianceDays : 0;
+  const overallVarianceDays = Math.max(0, finalVariance);
+
   let lineStatus: MilestoneStatus = 'Not Started';
   const allCompleted = updatedMilestones.every(m => m.status === 'Completed');
-  const hasDelayed = updatedMilestones.some(m => m.status === 'Delayed');
-  const hasAtRisk = updatedMilestones.some(m => m.status === 'At Risk');
+  const hasActiveDelayed = updatedMilestones.some(m => !m.actualEndDate && m.status === 'Delayed');
+  const hasActiveAtRisk = updatedMilestones.some(m => !m.actualEndDate && m.status === 'At Risk');
 
-  if (allCompleted) lineStatus = 'Completed';
-  else if (hasDelayed) lineStatus = 'Delayed';
-  else if (hasAtRisk) lineStatus = 'At Risk';
-  else if (updatedMilestones.some(m => m.status === 'In Progress' || m.status === 'Completed')) lineStatus = 'On Track';
+  if (allCompleted) {
+    lineStatus = 'Completed';
+  } else if (hasActiveDelayed || overallVarianceDays > 0) {
+    lineStatus = 'Delayed';
+  } else if (hasActiveAtRisk) {
+    lineStatus = 'At Risk';
+  } else if (updatedMilestones.some(m => m.status === 'In Progress' || m.status === 'Completed' || Boolean(m.actualStartDate))) {
+    lineStatus = 'On Track';
+  }
 
   return {
     ...healedLine,
     milestones: updatedMilestones,
-    overallVarianceDays: maxVariance,
+    overallVarianceDays,
     status: lineStatus
   };
 }
@@ -693,4 +705,20 @@ export function generateSuggestedRectifications(
   }
 
   return actions;
+}
+
+/**
+ * Idempotently merges user notes with an inherited delay summary without stacking duplicate text.
+ */
+export function mergeDelayReason(existingReason: string = '', inheritedSummary: string = ''): string {
+  if (!inheritedSummary) return existingReason;
+  const cleanExisting = (existingReason || '')
+    .split(/\s*\|\s*/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0 && !s.startsWith('Inherited delay from preceding') && !s.startsWith('Delay cascaded from'));
+
+  if (cleanExisting.length > 0) {
+    return `${cleanExisting.join(' | ')} | ${inheritedSummary}`;
+  }
+  return inheritedSummary;
 }

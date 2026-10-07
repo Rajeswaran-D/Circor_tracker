@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useApp } from "../../context/AppContext";
-import { CheckCircle2, ChevronDown, ChevronUp, Lock, AlertTriangle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronUp, Lock, AlertTriangle, Calendar } from "lucide-react";
 import { getPOManufacturingStatus } from "../../utils/statusUtils";
 import { todayLocal, addDays } from "../../services/calculationEngine";
 
@@ -14,6 +14,7 @@ export const RawMaterialsModule: React.FC = () => {
   const [expectedDate, setExpectedDate] = useState("");
   const [receivedDate, setReceivedDate] = useState("");
   const [inspectionResult, setInspectionResult] = useState<"Passed" | "Rejected" | "Pending">("Pending");
+  const [statusFilter, setStatusFilter] = useState<"active" | "all" | "completed">("active");
   const [successMsg, setSuccessMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -46,6 +47,21 @@ export const RawMaterialsModule: React.FC = () => {
 
   const canManageStage = isMilestoneOwnedByRole('material_receipt', activeRole);
 
+  const filteredOrders = purchaseOrders
+    .filter(po => po.status !== "Baseline Pending")
+    .filter(po => {
+      if (statusFilter === "active") {
+        return !po.isClosed && po.status !== "Completed";
+      }
+      if (statusFilter === "completed") {
+        return po.isClosed || po.status === "Completed";
+      }
+      return true;
+    });
+
+  const activeCount = purchaseOrders.filter(po => po.status !== "Baseline Pending" && !po.isClosed && po.status !== "Completed").length;
+  const completedCount = purchaseOrders.filter(po => po.status !== "Baseline Pending" && (po.isClosed || po.status === "Completed")).length;
+
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       {/* Unified Header Banner */}
@@ -68,6 +84,40 @@ export const RawMaterialsModule: React.FC = () => {
           <p className="text-xs text-slate-300 mt-1 max-w-2xl">
             Track raw material purchase orders, record actual receipt dates (GRN), and log incoming material quality inspections.
           </p>
+        </div>
+
+        {/* Filter Badges */}
+        <div className="flex items-center gap-1.5 bg-black/30 p-1.5 rounded-xl border border-white/10 text-xs">
+          <button
+            onClick={() => setStatusFilter("active")}
+            className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+              statusFilter === "active"
+                ? "bg-emerald-600 text-white shadow-xs"
+                : "text-slate-300 hover:text-white"
+            }`}
+          >
+            Active Queue ({activeCount})
+          </button>
+          <button
+            onClick={() => setStatusFilter("completed")}
+            className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+              statusFilter === "completed"
+                ? "bg-emerald-600 text-white shadow-xs"
+                : "text-slate-300 hover:text-white"
+            }`}
+          >
+            Completed ({completedCount})
+          </button>
+          <button
+            onClick={() => setStatusFilter("all")}
+            className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+              statusFilter === "all"
+                ? "bg-emerald-600 text-white shadow-xs"
+                : "text-slate-300 hover:text-white"
+            }`}
+          >
+            All
+          </button>
         </div>
       </div>
 
@@ -92,7 +142,11 @@ export const RawMaterialsModule: React.FC = () => {
         </div>
 
         <div className="divide-y divide-slate-100">
-          {purchaseOrders.filter(po => po.status !== "Baseline Pending").map(po => {
+          {filteredOrders.length === 0 ? (
+            <div className="p-8 text-center text-slate-500 text-xs font-medium">
+              No orders found in this view.
+            </div>
+          ) : filteredOrders.map(po => {
             const isExpanded = expandedPO === po.id;
             const statusSummary = getPOManufacturingStatus(po);
             const allMats = po.productLines.flatMap(l => l.materials.map(m => ({ ...m, lineId: l.id, lineName: l.lineNumber })));
@@ -112,7 +166,7 @@ export const RawMaterialsModule: React.FC = () => {
                     <span className="font-mono font-bold text-emerald-800 text-sm">{po.poNumber}</span>
                     <span className="font-semibold text-slate-900">{po.customerName}</span>
                     <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 text-xs font-mono">
-                      📅 {po.poDate} &rarr; <strong className="text-emerald-800">{po.revisedDeliveryDate || po.committedDeliveryDate}</strong>
+                      <Calendar className="w-3 h-3 text-slate-500" /> {po.poDate} &rarr; <strong className="text-emerald-800">{po.revisedDeliveryDate || po.committedDeliveryDate}</strong>
                     </span>
                     {po.isClosed && <span className="px-2 py-0.5 rounded-full bg-slate-100 border border-slate-300 text-slate-600 text-[10px] font-bold">CLOSED</span>}
                     {!designApproved && (
@@ -225,7 +279,7 @@ export const RawMaterialsModule: React.FC = () => {
                                       {mat.receivedDate ? (
                                         <div>
                                           <div className="font-mono text-emerald-700 font-bold">{mat.receivedDate}</div>
-                                          <div className="text-[10px] text-emerald-600 font-medium">✓ GRN Logged</div>
+                                          <div className="text-[10px] text-emerald-600 font-medium">GRN Logged</div>
                                         </div>
                                       ) : (
                                         <span className="text-slate-400 font-mono text-[11px]">Pending Receipt</span>

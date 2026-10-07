@@ -235,7 +235,7 @@ export const OrderIntakeModule: React.FC = () => {
                     onClick={() => canNavigate && setStep(s)}
                     className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center transition-all ${canNavigate ? "cursor-pointer hover:ring-2 hover:ring-emerald-400" : "cursor-default"} ${isDone ? "bg-emerald-600 text-white" : isCurrent ? "bg-emerald-700 text-white ring-2 ring-emerald-200" : "bg-slate-200 text-slate-500"}`}
                   >
-                    {isDone ? "✓" : i + 1}
+                    {isDone ? <CheckCircle2 className="w-3.5 h-3.5" /> : i + 1}
                   </button>
                   <span className={`text-xs font-semibold ${isCurrent ? "text-emerald-800 font-bold" : isDone ? "text-emerald-700" : "text-slate-400"}`}>{labels[i]}</span>
                   {i < 2 && <span className="text-slate-300 text-xs ml-2">›</span>}
@@ -276,9 +276,13 @@ export const OrderIntakeModule: React.FC = () => {
                     <div className="text-[10px] mt-1 font-mono">
                       {customPoNumber.trim() ? (
                         purchaseOrders.some(p => p.poNumber.trim().toLowerCase() === customPoNumber.trim().toLowerCase()) ? (
-                          <span className="text-rose-600 font-bold flex items-center gap-1">⚠️ Duplicate: already in use</span>
+                          <span className="text-rose-600 font-bold flex items-center gap-1">
+                            <AlertCircle className="w-3 h-3 text-rose-600" /> Duplicate: already in use
+                          </span>
                         ) : (
-                          <span className="text-emerald-700 font-semibold flex items-center gap-1">✓ Strictly unique</span>
+                          <span className="text-emerald-700 font-semibold flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Strictly unique
+                          </span>
                         )
                       ) : (
                         <span className="text-slate-400">Auto: PO-2026-XXX (Unique)</span>
@@ -655,26 +659,49 @@ export const OrderIntakeModule: React.FC = () => {
                     </div>
                   </button>
                   {isExpanded && (
-                    <div className="px-6 pb-5 space-y-3 bg-slate-50/40">
-                      {po.productLines.map((line) => (
-                        <div key={line.id} className="border border-slate-200 rounded-xl bg-white overflow-hidden">
-                          <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex justify-between text-xs font-semibold">
-                            <span className="text-slate-700">{line.lineNumber}: {line.productName} (Qty: {line.qty})</span>
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${line.status === "Completed" ? "bg-emerald-100 text-emerald-800" : line.status === "Delayed" ? "bg-rose-100 text-rose-800" : "bg-slate-200 text-slate-700"}`}>{line.status}</span>
-                          </div>
-                          <div className="p-4 grid grid-cols-3 gap-3">
-                            {line.milestones.slice(0, 3).map((ms, i) => (
-                              <div key={ms.id} className="text-xs">
-                                <div className="flex items-center gap-1.5 mb-1">
-                                  <div className={`w-4 h-4 rounded-full text-[9px] font-bold flex items-center justify-center ${ms.status === "Completed" ? "bg-emerald-600 text-white" : "bg-slate-200 text-slate-500"}`}>{i + 1}</div>
-                                  <span className="font-medium text-slate-700">{ms.name}</span>
-                                </div>
-                                <div className="text-[10px] font-mono text-slate-500">Due: <span className="text-slate-800 font-semibold">{ms.committedBaselineEndDate}</span></div>
-                              </div>
-                            ))}
-                          </div>
+                    <div className="px-6 pb-5 space-y-4 bg-slate-50/40">
+                      {/* Unified Master 14-Stage Schedule Strip */}
+                      <div className="border border-slate-200 rounded-xl bg-white p-4 space-y-3 shadow-2xs">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                          <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
+                            Order Master 14-Stage Baseline (All {po.productLines.length} Products)
+                          </span>
+                          <span className="text-[10px] font-mono text-emerald-800 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                            Delivery: {po.revisedDeliveryDate || po.committedDeliveryDate}
+                          </span>
                         </div>
-                      ))}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+                          {(po.productLines[0]?.milestones || []).map((ms) => (
+                            <div key={ms.key} className="p-2 bg-slate-50 rounded-lg border border-slate-100 text-[11px] space-y-0.5">
+                              <div className="text-[10px] font-mono text-slate-400 font-bold">Stage {ms.stageOrder}</div>
+                              <div className="font-bold text-slate-800 truncate" title={ms.name}>{ms.name}</div>
+                              <div className="text-[10px] font-mono text-emerald-700 font-semibold">{ms.committedBaselineEndDate}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Products in this order */}
+                      <div className="border border-slate-200 rounded-xl bg-white p-3 space-y-2 shadow-2xs">
+                        <div className="text-xs font-bold text-slate-700">Included Product Lines:</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                          {po.productLines.map((line) => (
+                            <div key={line.id} className="p-2.5 bg-slate-50 rounded-lg border border-slate-100 flex items-center justify-between text-xs">
+                              <div>
+                                <div className="font-bold text-slate-800">{line.lineNumber}: {line.productName}</div>
+                                <div className="text-[10px] text-slate-500 font-mono">Qty: {line.qty} | {line.designType}</div>
+                              </div>
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                line.status === 'Completed' ? 'bg-emerald-100 text-emerald-800' :
+                                line.status === 'Delayed' ? 'bg-rose-100 text-rose-800' : 'bg-slate-200 text-slate-700'
+                              }`}>
+                                {line.status}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>

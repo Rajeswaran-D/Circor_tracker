@@ -59,9 +59,19 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
   const milestones = line?.milestones || [];
   const activeMilestone = activeEntry?.milestone || milestones[milestones.length - 1];
 
-  // Find the EARLIEST (root-cause) milestone in sequence where the delay originated
-  // This identifies where the delay actually started rather than the last downstream milestone
-  const delayedEntries = lineEntries
+  // Highest net forecasted delay across all product lines in the PO
+  const maxPOVariance = Math.max(...po.productLines.map(l => l.overallVarianceDays || 0), 0);
+
+  // Active delayed entries on currently executing or un-recovered stages
+  const activeDelayedEntries = lineEntries
+    .filter(({ milestone }) => 
+      !milestone.actualEndDate && 
+      (milestone.status === 'Delayed' || (typeof milestone.varianceDays === 'number' && milestone.varianceDays > 0))
+    )
+    .sort((a, b) => a.milestone.stageOrder - b.milestone.stageOrder);
+
+  // Historical delayed entries where a delay reason was recorded
+  const historicalDelayedEntries = lineEntries
     .filter(({ milestone }) => 
       milestone.status === 'Delayed' || 
       Boolean(milestone.delayReason) || 
@@ -69,8 +79,7 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
     )
     .sort((a, b) => a.milestone.stageOrder - b.milestone.stageOrder);
 
-  const rootDelayedEntry = delayedEntries[0];
-  const delayedEntry = rootDelayedEntry;
+  const delayedEntry = activeDelayedEntries[0] || historicalDelayedEntries[0];
 
   let stageName = activeMilestone ? getStageFriendlyName(activeMilestone.key, line) : '1. Customer PO Intake';
 
@@ -82,33 +91,37 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
     ? 'Completed' 
     : (activeMilestone?.actualStartDate || activeMilestone?.status === 'In Progress' ? 'In Progress' : (activeMilestone?.status || 'In Progress'));
 
+  // An order is delayed if there is an active schedule variance or active delayed stage
   const isDelayed = !isOrderFinished && (
     po.status === 'Delayed' ||
-    po.productLines.some(productLine => productLine.status === 'Delayed') ||
-    po.productLines.some(productLine => (productLine.overallVarianceDays || 0) > 0) ||
-    Boolean(rootDelayedEntry) ||
-    (activeMilestone?.status === 'Delayed') ||
-    ((line.overallVarianceDays || 0) > 0)
+    maxPOVariance > 0 ||
+    po.productLines.some(productLine => productLine.status === 'Delayed' || (productLine.overallVarianceDays || 0) > 0) ||
+    activeDelayedEntries.length > 0 ||
+    (activeMilestone && (activeMilestone.status === 'Delayed' || (activeMilestone.varianceDays || 0) > 0))
   );
 
-  // Delayed stage name strictly matches the earliest stage where delay originated
+  // Delayed stage name matches the active delayed stage or root delay source
   const delayedStageName = isDelayed
-    ? (delayedEntry ? getStageFriendlyName(delayedEntry.milestone.key, delayedEntry.line) : (activeMilestone ? getStageFriendlyName(activeMilestone.key, line) : 'Production'))
+    ? (activeDelayedEntries[0] 
+        ? getStageFriendlyName(activeDelayedEntries[0].milestone.key, activeDelayedEntries[0].line) 
+        : (delayedEntry ? getStageFriendlyName(delayedEntry.milestone.key, delayedEntry.line) : (activeMilestone ? getStageFriendlyName(activeMilestone.key, line) : 'Production')))
     : undefined;
 
-  // Delay variance days from the root delayed milestone or line variance
+  // Net delay variance days correctly tallied from active overall variance
   const delayDays = isDelayed
-    ? (delayedEntry && typeof delayedEntry.milestone.varianceDays === 'number' && delayedEntry.milestone.varianceDays > 0
-        ? delayedEntry.milestone.varianceDays
-        : (line.overallVarianceDays && line.overallVarianceDays > 0)
-          ? line.overallVarianceDays
-          : (activeMilestone && typeof activeMilestone.varianceDays === 'number' && activeMilestone.varianceDays > 0)
-            ? activeMilestone.varianceDays
-            : 0)
+    ? (maxPOVariance > 0
+        ? maxPOVariance
+        : (activeMilestone && typeof activeMilestone.varianceDays === 'number' && activeMilestone.varianceDays > 0)
+          ? activeMilestone.varianceDays
+          : (activeDelayedEntries[0] && typeof activeDelayedEntries[0].milestone.varianceDays === 'number' && activeDelayedEntries[0].milestone.varianceDays > 0)
+            ? activeDelayedEntries[0].milestone.varianceDays
+            : (delayedEntry && typeof delayedEntry.milestone.varianceDays === 'number' && delayedEntry.milestone.varianceDays > 0)
+              ? delayedEntry.milestone.varianceDays
+              : 0)
     : 0;
 
   const delayReason = isDelayed
-    ? (delayedEntry?.milestone.delayReason || delayedEntry?.line.delayReason || activeMilestone?.delayReason || line.delayReason)
+    ? (activeDelayedEntries[0]?.milestone.delayReason || delayedEntry?.milestone.delayReason || delayedEntry?.line.delayReason || activeMilestone?.delayReason || line.delayReason)
     : undefined;
 
   const lastRevNum = (po.revisions && po.revisions.length > 0) ? po.revisions.length - 1 : 0;

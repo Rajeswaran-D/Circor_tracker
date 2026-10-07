@@ -13,10 +13,30 @@ import {
   CheckCircle2,
   Edit3,
   XCircle,
-  ShieldAlert
+  ShieldAlert,
+  LayoutGrid
 } from 'lucide-react';
 import { getPOManufacturingStatus, getStageFriendlyName } from '../../utils/statusUtils';
 import { BaselineRevisionModal } from './BaselineRevisionModal';
+import { OrderProgressOverview } from '../common/OrderProgressOverview';
+import { DelayAnalysisFlow } from '../common/DelayAnalysisFlow';
+
+const ALL_14_STAGES = [
+  { key: 'po_from_customer', label: '1. PO Intake' },
+  { key: 'pm_baseline', label: '2. PM Baseline' },
+  { key: 'corb_release', label: '3. CORB' },
+  { key: 'bom_release', label: '4. BOM' },
+  { key: 'wo_release', label: '5. WO' },
+  { key: 'sub_supplier_po', label: '6. Sub-PO' },
+  { key: 'material_receipt', label: '7. GRN' },
+  { key: 'machining', label: '8. Machining' },
+  { key: 'assembly', label: '9. Assembly' },
+  { key: 'fg', label: '10. FG' },
+  { key: 'customer_inspection', label: '11. Cust Insp' },
+  { key: 'painting', label: '12. Painting' },
+  { key: 'trn', label: '13. TRN' },
+  { key: 'shipment', label: '14. Shipment' }
+];
 
 interface PODetailDrawerProps {
   po: PurchaseOrder | null;
@@ -36,24 +56,22 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
   const [closureNotes, setClosureNotes] = useState('');
   const [showClosePrompt, setShowClosePrompt] = useState(false);
   const [closeNoteError, setCloseNoteError] = useState(false);
-  const [selectedLineIndex, setSelectedLineIndex] = useState(0);
-
+  const [drawerView, setDrawerView] = useState<'timeline' | 'matrix'>('timeline');
   const [closureError, setClosureError] = useState<string | null>(null);
+  const [selectedLineId, setSelectedLineId] = useState<string>('');
 
   if (!po) return null;
 
   const statusSummary = getPOManufacturingStatus(po);
-  const activeLineIndex = Math.min(selectedLineIndex, (po.productLines?.length || 1) - 1);
-  const selectedLine = po.productLines[activeLineIndex] || po.productLines[0];
+  const selectedLine = po.productLines.find(l => l.id === selectedLineId) || po.productLines[0];
 
   const delayedLines = (po.productLines || []).filter(l => l.status === 'Delayed' || (l.overallVarianceDays && l.overallVarianceDays > 0));
-  const onTrackLines = (po.productLines || []).filter(l => l.status !== 'Delayed' && (!l.overallVarianceDays || l.overallVarianceDays <= 0));
 
-  const allMilestonesComplete = po.productLines.every(line =>
-    line.milestones.every(m => m.status === 'Completed' || Boolean(m.actualEndDate))
+  const allMilestonesComplete = po.productLines.length > 0 && po.productLines.every(line =>
+    line.milestones.every(m => m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100)
   );
 
-  const canClosePO = activeRole === 'Project Management' || activeRole === 'Project Manager (PM Baseline)';
+  const canClosePO = allMilestonesComplete || activeRole === 'Project Management' || activeRole === 'Project Manager (PM Baseline)' || activeRole === 'Stores (Shipment)';
   const canReviseBaseline = activeRole === 'Project Manager (PM Baseline)';
   const isAdmin = activeRole === 'Project Management';
   const hasPendingCancel = po.cancellationRequest?.status === 'Pending';
@@ -78,7 +96,7 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
   return (
     <>
       <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-40 flex justify-end">
-        <div className="w-full max-w-2xl bg-white border-l border-slate-200 h-full flex flex-col shadow-2xl text-slate-800">
+        <div className={`w-full ${drawerView === 'matrix' ? 'max-w-5xl' : 'max-w-2xl'} bg-white border-l border-slate-200 h-full flex flex-col shadow-2xl text-slate-800 transition-all duration-200`}>
           
           {/* Header */}
           <div className="bg-slate-50 p-5 border-b border-slate-200 flex items-center justify-between">
@@ -93,6 +111,26 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                 }`}>
                   {po.status === 'Cancelled' || po.isCancelled ? 'CANCELLED' : statusSummary.isDelayed ? `DELAYED (+${statusSummary.delayDays}d)` : po.isClosed ? 'CLOSED' : 'ON TIME'}
                 </span>
+                {po.productLines && po.productLines.length > 1 && (
+                  <div className="flex bg-slate-200 p-0.5 rounded-lg text-xs ml-1">
+                    <button
+                      onClick={() => setDrawerView('timeline')}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
+                        drawerView === 'timeline' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Single Flow
+                    </button>
+                    <button
+                      onClick={() => setDrawerView('matrix')}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
+                        drawerView === 'matrix' ? 'bg-emerald-700 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      14-Stage Matrix
+                    </button>
+                  </div>
+                )}
                 {hasPendingCancel && (
                   <span className="px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-800 font-mono text-[10px] font-bold flex items-center gap-1">
                     <ShieldAlert className="w-3 h-3 text-amber-600" /> CANCEL PENDING
@@ -122,9 +160,14 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
               {canClosePO && !po.isClosed && po.status !== 'Cancelled' && (
                 <button
                   onClick={() => setShowClosePrompt(true)}
-                  className="px-3 py-1.5 text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 font-bold rounded-lg transition-colors cursor-pointer"
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                    allMilestonesComplete
+                      ? 'bg-emerald-700 hover:bg-emerald-800 text-white shadow-md ring-2 ring-emerald-400/40 animate-pulse'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
+                  }`}
                 >
-                  Close Order
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  {allMilestonesComplete ? 'Close Order (Ready)' : 'Close Order'}
                 </button>
               )}
 
@@ -213,8 +256,9 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                   <AlertTriangle className="w-4 h-4 text-amber-600" /> Confirm Order Closure
                 </div>
                 {!allMilestonesComplete ? (
-                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 font-medium">
-                    ⚠️ Cannot close order: Not all milestones have been completed across the product lines. Please complete all preceding milestones (such as dispatch and site delivery) first.
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 font-medium flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>Cannot close order: Not all milestones have been completed across the product lines. Please complete all preceding milestones (such as dispatch and site delivery) first.</span>
                   </div>
                 ) : (
                   <p className="text-slate-700">
@@ -280,32 +324,28 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
               )}
             </div>
 
-            {/* MULTI-PRODUCT LINE SWITCHER TABS & ISOLATION */}
+            {/* MULTI-PRODUCT SYNC SUMMARY */}
             {po.productLines && po.productLines.length > 1 && (
               <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                     <Package className="w-4 h-4 text-emerald-700" />
-                    Product Lines in this Order ({po.productLines.length})
+                    Synchronized Products in Order ({po.productLines.length} Lines)
                   </span>
-                  <span className="text-[10px] text-slate-400 font-mono">Select a product to view independent milestone track</span>
+                  <span className="text-[10px] text-cyan-800 bg-cyan-50 border border-cyan-200 px-2 py-0.5 rounded font-mono font-bold">
+                    Single Master Baseline Linked
+                  </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
                   {po.productLines.map((line, idx) => {
-                    const isSelected = idx === activeLineIndex;
                     const isLineDelayed = line.status === 'Delayed' || (line.overallVarianceDays && line.overallVarianceDays > 0);
                     const lineCompletedCount = (line.milestones || []).filter(m => m.status === 'Completed' || Boolean(m.actualEndDate)).length;
 
                     return (
-                      <button
+                      <div
                         key={line.id || idx}
-                        onClick={() => setSelectedLineIndex(idx)}
-                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-2 ${
-                          isSelected
-                            ? 'bg-emerald-50/80 border-emerald-500 ring-2 ring-emerald-400/30 shadow-xs'
-                            : 'bg-slate-50 hover:bg-slate-100 border-slate-200'
-                        }`}
+                        className="p-3 rounded-xl border bg-slate-50 border-slate-200 flex flex-col justify-between gap-2"
                       >
                         <div className="flex items-start justify-between gap-1.5">
                           <span className="font-bold text-slate-900 text-xs line-clamp-1" title={line.productName}>
@@ -323,270 +363,409 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                         </div>
 
                         <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono pt-1 border-t border-slate-200/60">
-                          <span>Qty: {line.qty || 1}</span>
-                          <span>{lineCompletedCount}/14 Stages</span>
+                          <span>Qty: {line.qty || 1} ({line.designType})</span>
+                          <span className="font-bold text-emerald-700">{lineCompletedCount}/14 Stages</span>
                         </div>
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
 
                 {/* Delay Isolation Notice when only some products are delayed */}
-                {delayedLines.length > 0 && onTrackLines.length > 0 && (
+                {delayedLines.length > 0 && (
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-950 text-xs space-y-1">
                     <div className="font-bold flex items-center gap-1.5 text-amber-900">
-                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" /> Multi-Product Schedule Variance Isolation:
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" /> Variance Tracking:
                     </div>
                     <p className="text-[11px] text-slate-700 leading-relaxed">
-                      Delay is isolated to <strong className="text-rose-800">{delayedLines.map(l => l.productName).join(', ')}</strong> (+{Math.max(...delayedLines.map(l => l.overallVarianceDays || 0))}d). Meanwhile, <strong className="text-emerald-800">{onTrackLines.map(l => l.productName).join(', ')}</strong> {onTrackLines.length === 1 ? 'is' : 'are'} on track with no schedule impact.
+                      Delay recorded on <strong className="text-rose-800">{delayedLines.map(l => l.productName).join(', ')}</strong> (+{Math.max(...delayedLines.map(l => l.overallVarianceDays || 0))}d variance).
                     </p>
                   </div>
                 )}
               </div>
             )}
 
-            {/* LIVE MANUFACTURING CURRENT STATUS HERO CARD */}
-            <div className={`p-5 rounded-2xl border shadow-xs space-y-4 ${
-              (selectedLine?.status === 'Delayed' || (selectedLine?.overallVarianceDays && selectedLine?.overallVarianceDays > 0))
-                ? 'bg-rose-500/5 border-rose-200 text-rose-900'
-                : 'bg-emerald-500/5 border-emerald-200 text-emerald-950'
-            }`}>
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-mono uppercase font-bold tracking-wider text-slate-500">
-                  CURRENT LIVE STATUS ({selectedLine?.productName})
-                </span>
-                <span className="text-xs font-mono font-bold text-slate-600">
-                  Target Deadline: <span className="text-slate-900">{po.revisedDeliveryDate || po.committedDeliveryDate}</span>
-                </span>
-              </div>
-
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-3 h-3 rounded-full bg-emerald-600 animate-ping"></span>
-                    <h3 className="text-lg font-black tracking-tight text-slate-900">
-                      {(() => {
-                        const activeMs = selectedLine?.milestones.find(m => m.status !== 'Completed' && !m.actualEndDate);
-                        return activeMs ? getStageFriendlyName(activeMs.key, selectedLine) : 'Delivered & Completed';
-                      })()}
-                    </h3>
-                  </div>
-                  <p className="text-xs text-slate-600 mt-1">
-                    Line #{activeLineIndex + 1}: <span className="font-semibold text-slate-800">{selectedLine?.productName}</span> ({selectedLine?.designType}) • Qty: {selectedLine?.qty || 1}
-                  </p>
-                </div>
-
-                <div className="text-right">
-                  <div className="text-2xl font-black font-mono text-emerald-700">
-                    {Math.round(((selectedLine?.milestones.filter(m => m.status === 'Completed' || Boolean(m.actualEndDate)).length || 0) / 14) * 100)}%
-                  </div>
-                  <div className="text-[10px] text-slate-500 font-mono">Line Completed</div>
-                </div>
-              </div>
-
-              {/* Progress Bar */}
-              <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
-                <div 
-                  className={`h-2.5 rounded-full transition-all duration-500 ${
-                    (selectedLine?.status === 'Delayed' || (selectedLine?.overallVarianceDays && selectedLine?.overallVarianceDays > 0)) ? 'bg-rose-500' : 'bg-emerald-600'
-                  }`}
-                  style={{ width: `${Math.round(((selectedLine?.milestones.filter(m => m.status === 'Completed' || Boolean(m.actualEndDate)).length || 0) / 14) * 100)}%` }}
-                ></div>
-              </div>
-
-              {/* Delay Banner if Selected Line is Delayed */}
-              {(selectedLine?.status === 'Delayed' || (selectedLine?.overallVarianceDays && selectedLine?.overallVarianceDays > 0)) && (
-                <div className="p-3 bg-rose-100/80 border border-rose-200 rounded-xl flex items-start gap-2 text-rose-900 text-xs">
-                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+            {/* BODY VIEW 1: 14-STAGE MULTI-PRODUCT MATRIX */}
+            {drawerView === 'matrix' ? (
+              <div className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden space-y-3">
+                <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
                   <div>
-                    <span className="font-bold">
-                      {selectedLine.productName} is Delayed (+{selectedLine.overallVarianceDays || 3}d calculated variance):
-                    </span>{' '}
-                    <span>{selectedLine.milestones.find(m => m.delayReason)?.delayReason || 'Schedule running behind committed baseline for this product.'}</span>
+                    <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                      <LayoutGrid className="w-4 h-4 text-emerald-700" />
+                      Multi-Product 14-Stage Manufacturing Matrix ({po.productLines.length} Product Lines)
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">Live shop-floor progress across all product lines under the PO Master Baseline.</p>
+                  </div>
+                  <div className="flex items-center gap-3 text-[10px] font-mono text-slate-500">
+                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Passed</span>
+                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500"></span> In Execution</span>
+                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500"></span> Delayed</span>
+                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-300"></span> Pending</span>
                   </div>
                 </div>
-              )}
-            </div>
 
-            {/* MANUFACTURING PIPELINE (STAGE BY STAGE FLOW FOR SELECTED PRODUCT) */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                  <Wrench className="w-4 h-4 text-emerald-700" />
-                  Manufacturing Stage Progress: {selectedLine?.productName} ({(selectedLine?.milestones || []).filter(m => m.status === 'Completed' || Boolean(m.actualEndDate)).length}/14 Completed)
-                </h3>
-                <span className="text-[10px] font-mono text-slate-400">Shop-Floor Execution</span>
-              </div>
-
-              <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-3 before:bottom-3 before:w-0.5 before:bg-slate-200">
-                {selectedLine?.milestones.map((ms, index) => {
-                  const isCompleted = ms.status === 'Completed' || Boolean(ms.actualEndDate);
-                  const isStarted = Boolean(ms.actualStartDate) && !isCompleted;
-                  const isInProgress = (isStarted || ms.status === 'In Progress') && !isCompleted;
-                  const isPendingBaseline = po.status === 'Baseline Pending';
-                  const activeStageIdx = selectedLine.milestones.findIndex(m => m.status !== 'Completed' && !m.actualEndDate);
-                  const isCurrent = !isPendingBaseline && index === activeStageIdx;
-                  const isDelayed = (ms.status === 'Delayed' || (typeof ms.varianceDays === 'number' && ms.varianceDays > 0)) && !isCompleted;
-                  const friendlyName = getStageFriendlyName(ms.key, selectedLine);
-
-                  const displayStartDate = ms.actualStartDate || ms.forecastStartDate || ms.committedBaselineStartDate || po.poDate || 'Pending';
-                  const displayEndDate = ms.actualEndDate || ms.forecastEndDate || ms.committedBaselineEndDate || 'Pending';
-
-                  return (
-                    <React.Fragment key={ms.id}>
-                    <div className="relative flex items-start justify-between gap-4 group">
-                      
-                      {/* Node Bullet Icon */}
-                      <div className={`absolute -left-6 top-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold border ${
-                        isCompleted ? 'bg-emerald-600 border-emerald-600 text-white' :
-                        isInProgress ? 'bg-blue-600 border-blue-600 text-white ring-2 ring-blue-400/40' :
-                        isDelayed ? 'bg-rose-500 border-rose-500 text-white' :
-                        isCurrent ? 'bg-emerald-100 border-emerald-600 text-emerald-800 ring-2 ring-emerald-400/30' :
-                        'bg-slate-100 border-slate-300 text-slate-400'
-                      }`}>
-                        {isCompleted ? '✓' : ms.stageOrder}
-                      </div>
-
-                      {/* Stage Information */}
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className={`font-bold ${isCurrent ? 'text-emerald-950 text-sm' : isCompleted ? 'text-slate-800' : 'text-slate-500'}`}>
-                            {friendlyName}
-                          </span>
-
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
-                            isCompleted ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
-                            isInProgress ? (isDelayed ? 'bg-blue-50 border-blue-300 text-blue-900 shadow-2xs' : 'bg-blue-50 border-blue-200 text-blue-800 shadow-2xs') :
-                            isPendingBaseline ? 'bg-amber-50 border-amber-200 text-amber-800' :
-                            isDelayed ? 'bg-rose-50 border-rose-200 text-rose-800' :
-                            'bg-slate-100 border-slate-200 text-slate-500'
-                          }`}>
-                            {isCompleted ? 'Completed' :
-                             isInProgress ? (isDelayed && ms.varianceDays && ms.varianceDays > 0 ? `IN EXECUTION (+${ms.varianceDays}d)` : 'IN EXECUTION') :
-                             isPendingBaseline ? 'Baseline Pending' :
-                             isDelayed ? 'Delayed' :
-                             'Not Started'}
-                          </span>
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] font-mono mt-1 text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-200/80">
-                          <div>
-                            <span className="text-slate-400 font-semibold uppercase">{isStarted ? 'Actual Start:' : 'Planned Start:'}</span>{' '}
-                            <span className={`font-bold ${isStarted ? 'text-blue-700' : 'text-slate-800'}`}>
-                              {displayStartDate}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-slate-400 font-semibold uppercase">{isCompleted ? 'Actual End Date:' : 'Planned/Forecast End:'}</span>{' '}
-                            <span className={`font-bold ${isCompleted ? 'text-emerald-700' : 'text-slate-800'}`}>
-                              {displayEndDate}
-                            </span>
-                          </div>
-                          {isCompleted && ms.actualEndDate && (
-                            <div className="text-emerald-700 font-semibold">
-                              ✓ Passed on {ms.actualEndDate}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Display explicit delay reason on the milestone where delay was entered/occurred */}
-                        {ms.delayReason && !ms.delayReason.startsWith('Cascaded delay from preceding') && (
-                          <div className="text-[11px] text-rose-700 bg-rose-50 p-2 rounded-lg mt-1.5 border border-rose-100 flex items-center gap-1.5 font-medium">
-                            <span className="font-bold">Reason:</span> {ms.delayReason}
-                          </div>
-                        )}
-
-                        {/* For upcoming downstream milestones impacted by schedule shift, show simply the delay days count */}
-                        {isDelayed && (!ms.delayReason || ms.delayReason.startsWith('Cascaded delay from preceding')) && ms.varianceDays && ms.varianceDays > 0 && !isCompleted && (
-                          <div className="text-[11px] text-amber-800 bg-amber-50/80 p-1.5 px-2.5 rounded-lg mt-1.5 border border-amber-200/70 inline-flex items-center gap-1 font-mono font-medium">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-                            <span>Baseline Delay: <strong className="text-amber-900 font-bold">+{ms.varianceDays} {ms.varianceDays === 1 ? 'day' : 'days'}</strong></span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Quick Record Action Buttons - STRICTLY FOR ACTIVE MILESTONE ONLY */}
-                      {!po.isClosed && po.status !== 'Completed' && !isPendingBaseline && isCurrent && (() => {
-                        const isAuthorizedForMilestone = isMilestoneOwnedByRole(ms.key, activeRole);
-                        if (!isAuthorizedForMilestone) return null;
+                <div className="overflow-x-auto p-3">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px] font-mono">
+                        <th className="py-2.5 px-3 min-w-40 sticky left-0 bg-slate-100/95 z-10">Product Line</th>
+                        <th className="py-2.5 px-2 text-center">Qty</th>
+                        <th className="py-2.5 px-2 text-center">Variance</th>
+                        {ALL_14_STAGES.map((st) => (
+                          <th key={st.key} className="py-2.5 px-1.5 text-center text-[10px] whitespace-nowrap">
+                            {st.label}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-800">
+                      {po.productLines.map((line, lIdx) => {
+                        const isLineDelayed = line.status === 'Delayed' || (line.overallVarianceDays && line.overallVarianceDays > 0);
 
                         return (
-                          <div className="shrink-0 flex items-center gap-1.5">
-                            {!ms.actualStartDate ? (
-                              <button
-                                onClick={() => onOpenManualInput(po, selectedLine, ms, 'start')}
-                                className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-md text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
-                              >
-                                <Play className="w-3 h-3 text-slate-600" /> Record Start
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => onOpenManualInput(po, selectedLine, ms, 'start')}
-                                className="px-2 py-1 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-md text-[10px] font-medium flex items-center gap-1 cursor-pointer"
-                                title="Edit / Re-enter Start Date"
-                              >
-                                <Edit3 className="w-3 h-3 text-slate-500" /> Edit Start
-                              </button>
-                            )}
-                            <button
-                              onClick={() => onOpenManualInput(po, selectedLine, ms, 'complete')}
-                              className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded-md text-[10px] font-bold shadow-xs flex items-center gap-1 cursor-pointer"
-                            >
-                              <CheckSquare className="w-3 h-3" /> Mark Complete
-                            </button>
-                          </div>
+                          <tr
+                            key={line.id}
+                            className="hover:bg-slate-50 transition-colors"
+                          >
+                            <td className="py-2.5 px-3 sticky left-0 bg-white group-hover:bg-slate-50 z-10 border-r border-slate-100">
+                              <div className="font-bold text-slate-900 text-xs truncate max-w-44" title={line.productName}>
+                                #{lIdx + 1} {line.productName}
+                              </div>
+                              <div className="text-[10px] font-mono text-slate-400">{line.designType}</div>
+                            </td>
+
+                            <td className="py-2.5 px-2 text-center font-mono text-slate-700 font-bold">
+                              {line.qty}
+                            </td>
+
+                            <td className="py-2.5 px-2 text-center font-mono font-bold">
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] ${
+                                isLineDelayed ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                              }`}>
+                                {isLineDelayed ? `+${line.overallVarianceDays || 0}d` : '0d'}
+                              </span>
+                            </td>
+
+                            {ALL_14_STAGES.map((st, sIdx) => {
+                              const ms = (line.milestones || []).find(m => m.key === st.key);
+                              const isStageDone = ms?.status === 'Completed' || Boolean(ms?.actualEndDate);
+                              const isStageStarted = Boolean(ms?.actualStartDate) && !isStageDone;
+                              const isStageDelayed = ms?.status === 'Delayed' || (typeof ms?.varianceDays === 'number' && ms.varianceDays > 0);
+
+                              return (
+                                <td key={st.key} className="py-2 px-1 text-center">
+                                  <span
+                                    className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-mono font-bold transition-transform hover:scale-110 ${
+                                      isStageDone
+                                        ? 'bg-emerald-600 text-white shadow-2xs'
+                                        : isStageStarted
+                                        ? isStageDelayed
+                                          ? 'bg-blue-600 text-white ring-2 ring-rose-400'
+                                          : 'bg-blue-600 text-white ring-2 ring-blue-300'
+                                        : isStageDelayed
+                                        ? 'bg-rose-500 text-white ring-1 ring-rose-300'
+                                        : 'bg-slate-200 text-slate-500'
+                                    }`}
+                                    title={`${st.label}: ${ms?.status || 'Pending'} (${ms?.actualEndDate || ms?.forecastEndDate || 'Planned'})`}
+                                  >
+                                    {isStageDone ? 'Done' : isStageStarted ? 'In Prog' : isStageDelayed ? 'Delay' : sIdx + 1}
+                                  </span>
+                                </td>
+                              );
+                            })}
+                          </tr>
                         );
-                      })()}
-                      
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* ANIMATED MASTER & PRODUCT PROGRESS OVERVIEW */}
+                <OrderProgressOverview
+                  po={po}
+                  onOpenCloseModal={() => setShowClosePrompt(true)}
+                  defaultExpanded={true}
+                />
+
+                {/* BOLD ROOT CAUSE DELAY & WATERFALL FLOW */}
+                <DelayAnalysisFlow po={po} />
+
+                {/* MANUFACTURING PIPELINE (ORDER MASTER 14-STAGE FLOW) */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div>
+                      <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                        <Wrench className="w-4 h-4 text-emerald-700" />
+                        Order Master 14-Stage Manufacturing Timeline
+                      </h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Single master schedule governing all {po.productLines.length} product lines in PO {po.poNumber}.
+                      </p>
                     </div>
-                    </React.Fragment>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* RAW MATERIALS CRITICAL PATH SUMMARY FOR SELECTED PRODUCT */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                <h4 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-                  <Package className="w-4 h-4 text-emerald-700" /> Raw Materials Bill of Materials: {selectedLine?.productName}
-                </h4>
-                <span className="text-[10px] font-mono text-slate-400">{selectedLine?.materials?.length || 0} Item(s)</span>
-              </div>
-
-              <div className="space-y-2">
-                {(!selectedLine?.materials || selectedLine.materials.length === 0) ? (
-                  <div className="p-3 bg-slate-50 rounded-xl text-center text-slate-400 text-xs">
-                    Standard materials assigned.
+                    <span className="text-[10px] font-mono font-bold bg-cyan-50 text-cyan-800 border border-cyan-200 px-2.5 py-1 rounded-lg">
+                      Master Baseline Synced
+                    </span>
                   </div>
-                ) : (
-                  selectedLine.materials.map((mat) => (
-                    <div key={mat.id} className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl flex items-center justify-between text-xs">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900">{mat.itemCode}</span>
-                          {mat.isCriticalPath && (
-                            <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-800 font-mono text-[9px] font-bold border border-rose-200">
-                              CRITICAL
-                            </span>
-                          )}
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold border ${
-                            mat.inspectionResult === 'Passed' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-800'
-                          }`}>
-                            GRN: {mat.inspectionResult || 'Pending'}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-600 mt-0.5">{mat.description}</p>
-                      </div>
-                      <div className="text-right text-[10px] font-mono text-slate-500">
-                        <div>Supplier: {mat.supplierName}</div>
-                        <div>Lead Time: {mat.leadTimeDays}d | Expected: {mat.expectedDate || 'Pending'}</div>
-                      </div>
+
+                  {/* Product Line Focus Selector */}
+                  {po.productLines.length > 1 && (
+                    <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-1 border-b border-slate-100">
+                      <span className="text-[11px] font-bold text-slate-400 shrink-0 uppercase tracking-wider">Line Focus:</span>
+                      {po.productLines.map((line, pIdx) => {
+                        const isSelected = line.id === selectedLine?.id;
+                        const isLineDelayed = line.status === 'Delayed' || (line.overallVarianceDays && line.overallVarianceDays > 0);
+                        return (
+                          <button
+                            key={line.id}
+                            onClick={() => setSelectedLineId(line.id)}
+                            className={`px-3 py-1 rounded-lg text-[11px] font-semibold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer border ${
+                              isSelected
+                                ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                                : isLineDelayed
+                                ? 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
+                                : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
+                            }`}
+                          >
+                            <span>#{pIdx + 1} {line.productName}</span>
+                            {isLineDelayed && (
+                              <span className="px-1.5 py-0.2 bg-rose-500 text-white rounded text-[9px] font-bold">
+                                +{line.overallVarianceDays || 0}d
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
-                  ))
-                )}
-              </div>
-            </div>
+                  )}
+
+                  <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-3 before:bottom-3 before:w-0.5 before:bg-slate-200">
+                    {selectedLine?.milestones.map((ms, index) => {
+                      // Collect milestone data across all product lines for this stage
+                      const productLineMilestones = po.productLines.map((line, pIdx) => {
+                        const lineMs = line.milestones.find(m => m.key === ms.key);
+                        const isLineDone = lineMs?.status === 'Completed' || Boolean(lineMs?.actualEndDate);
+                        const isLineStarted = Boolean(lineMs?.actualStartDate) && !isLineDone;
+                        const lineVariance = lineMs?.varianceDays || 0;
+                        const isLineDelayed = !isLineDone && (lineMs?.status === 'Delayed' || lineVariance > 0);
+                        return {
+                          line,
+                          pIdx,
+                          ms: lineMs,
+                          isLineDone,
+                          isLineStarted,
+                          isLineDelayed,
+                          varianceDays: lineVariance,
+                          delayReason: lineMs?.delayReason
+                        };
+                      });
+
+                      const maxStageVariance = Math.max(0, ...productLineMilestones.map(p => p.varianceDays));
+                      const anyLineDelayed = productLineMilestones.some(p => p.isLineDelayed);
+                      const allLinesDone = productLineMilestones.length > 0 && productLineMilestones.every(p => p.isLineDone);
+
+                      const isCompleted = ms.status === 'Completed' || Boolean(ms.actualEndDate) || allLinesDone;
+                      const isStarted = (Boolean(ms.actualStartDate) || productLineMilestones.some(p => p.isLineStarted)) && !isCompleted;
+                      const isInProgress = (isStarted || ms.status === 'In Progress') && !isCompleted;
+                      const isPendingBaseline = po.status === 'Baseline Pending';
+                      const activeStageIdx = selectedLine.milestones.findIndex(m => m.status !== 'Completed' && !m.actualEndDate);
+                      const isCurrent = !isPendingBaseline && index === activeStageIdx;
+                      const isStageDelayed = !isCompleted && (ms.status === 'Delayed' || (typeof ms.varianceDays === 'number' && ms.varianceDays > 0) || anyLineDelayed || maxStageVariance > 0);
+                      const friendlyName = getStageFriendlyName(ms.key, selectedLine);
+
+                      const displayStartDate = ms.actualStartDate || ms.forecastStartDate || ms.committedBaselineStartDate || po.poDate || 'Pending';
+                      const displayEndDate = ms.actualEndDate || ms.forecastEndDate || ms.committedBaselineEndDate || 'Pending';
+
+                      const delayedLineWithReason = productLineMilestones.find(p => p.delayReason && !p.delayReason.startsWith('Cascaded delay'));
+                      const stageDelayReason = delayedLineWithReason?.delayReason || (ms.delayReason && !ms.delayReason.startsWith('Cascaded delay') ? ms.delayReason : undefined);
+
+                      return (
+                        <React.Fragment key={ms.id}>
+                        <div className="relative flex items-start justify-between gap-4 group">
+                          
+                          {/* Node Bullet Icon */}
+                          <div className={`absolute -left-6 top-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold border ${
+                            isCompleted ? 'bg-emerald-600 border-emerald-600 text-white' :
+                            isStageDelayed ? 'bg-rose-500 border-rose-500 text-white' :
+                            isInProgress ? 'bg-blue-600 border-blue-600 text-white ring-2 ring-blue-400/40' :
+                            isCurrent ? 'bg-emerald-100 border-emerald-600 text-emerald-800 ring-2 ring-emerald-400/30' :
+                            'bg-slate-100 border-slate-300 text-slate-400'
+                          }`}>
+                            {isCompleted ? <CheckCircle2 className="w-3.5 h-3.5" /> : ms.stageOrder}
+                          </div>
+
+                          {/* Stage Information */}
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className={`font-bold ${isCurrent ? 'text-emerald-950 text-sm' : isCompleted ? 'text-slate-800' : 'text-slate-500'}`}>
+                                {friendlyName}
+                              </span>
+
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
+                                isCompleted 
+                                  ? (maxStageVariance > 0 || stageDelayReason 
+                                      ? 'bg-amber-50 border-amber-300 text-amber-900' 
+                                      : 'bg-emerald-50 border-emerald-200 text-emerald-800')
+                                  : isStageDelayed ? 'bg-rose-50 border-rose-200 text-rose-800 shadow-2xs'
+                                  : isInProgress ? 'bg-blue-50 border-blue-200 text-blue-800 shadow-2xs'
+                                  : isPendingBaseline ? 'bg-amber-50 border-amber-200 text-amber-800'
+                                  : 'bg-slate-100 border-slate-200 text-slate-500'
+                              }`}>
+                                {isCompleted 
+                                  ? (maxStageVariance > 0 ? `Completed (+${maxStageVariance}d late)` : 'Completed')
+                                  : isStageDelayed ? (maxStageVariance > 0 ? `Delayed (+${maxStageVariance}d)` : 'Delayed')
+                                  : isInProgress ? 'IN EXECUTION'
+                                  : isPendingBaseline ? 'Baseline Pending'
+                                  : 'Not Started'}
+                              </span>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] font-mono mt-1 text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-200/80">
+                              <div>
+                                <span className="text-slate-400 font-semibold uppercase">{isStarted ? 'Actual Start:' : 'Planned Start:'}</span>{' '}
+                                <span className={`font-bold ${isStarted ? 'text-blue-700' : 'text-slate-800'}`}>
+                                  {displayStartDate}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-slate-400 font-semibold uppercase">{isCompleted ? 'Actual End Date:' : 'Planned/Forecast End:'}</span>{' '}
+                                <span className={`font-bold ${isCompleted ? 'text-emerald-700' : 'text-slate-800'}`}>
+                                  {displayEndDate}
+                                </span>
+                              </div>
+                              {isCompleted && ms.actualEndDate && (
+                                <div className="text-emerald-700 font-semibold">
+                                  Passed on {ms.actualEndDate}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Multi-Product Progress Indicator */}
+                            {po.productLines.length > 1 && (
+                              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                {productLineMilestones.map(({ line, pIdx, isLineDone, isLineStarted, isLineDelayed, varianceDays }) => (
+                                  <span
+                                    key={line.id}
+                                    className={`px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1 border ${
+                                      isLineDone ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
+                                      isLineDelayed ? 'bg-rose-50 text-rose-800 border-rose-300 font-semibold' :
+                                      isLineStarted ? 'bg-blue-50 text-blue-800 border-blue-200' :
+                                      'bg-slate-100 text-slate-600 border-slate-200'
+                                    }`}
+                                  >
+                                    <span>#{pIdx + 1} {line.productName}:</span>
+                                    <strong>
+                                      {isLineDone ? 'Done' :
+                                       isLineDelayed ? `Delayed (+${varianceDays}d)` :
+                                       isLineStarted ? 'In Execution' :
+                                       'Pending'}
+                                    </strong>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Display explicit delay reason on the milestone where delay was entered/occurred */}
+                            {stageDelayReason && (
+                              <div className="text-[11px] text-rose-700 bg-rose-50 p-2 rounded-lg mt-1.5 border border-rose-100 flex items-center gap-1.5 font-medium">
+                                <span className="font-bold">Reason {delayedLineWithReason && po.productLines.length > 1 ? `(#${delayedLineWithReason.pIdx + 1}):` : ':'}</span> {stageDelayReason}
+                              </div>
+                            )}
+
+                            {/* For upcoming downstream milestones impacted by schedule shift, show simply the delay days count */}
+                            {isStageDelayed && !stageDelayReason && maxStageVariance > 0 && !isCompleted && (
+                              <div className="text-[11px] text-amber-800 bg-amber-50/80 p-1.5 px-2.5 rounded-lg mt-1.5 border border-amber-200/70 inline-flex items-center gap-1 font-mono font-medium">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                                <span>Baseline Delay: <strong className="text-amber-900 font-bold">+{maxStageVariance} {maxStageVariance === 1 ? 'day' : 'days'}</strong></span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Quick Record Action Buttons - STRICTLY FOR ACTIVE MILESTONE ONLY */}
+                          {!po.isClosed && po.status !== 'Completed' && !isPendingBaseline && isCurrent && (() => {
+                            const isAuthorizedForMilestone = isMilestoneOwnedByRole(ms.key, activeRole);
+                            if (!isAuthorizedForMilestone) return null;
+
+                            return (
+                              <div className="shrink-0 flex items-center gap-1.5">
+                                {!ms.actualStartDate ? (
+                                  <button
+                                    onClick={() => onOpenManualInput(po, selectedLine, ms, 'start')}
+                                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 rounded-md text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Play className="w-3 h-3 text-slate-600" /> Record Start
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => onOpenManualInput(po, selectedLine, ms, 'start')}
+                                    className="px-2 py-1 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-md text-[10px] font-medium flex items-center gap-1 cursor-pointer"
+                                    title="Edit / Re-enter Start Date"
+                                  >
+                                    <Edit3 className="w-3 h-3 text-slate-500" /> Edit Start
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => onOpenManualInput(po, selectedLine, ms, 'complete')}
+                                  className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded-md text-[10px] font-bold shadow-xs flex items-center gap-1 cursor-pointer"
+                                >
+                                  <CheckSquare className="w-3 h-3" /> Mark Complete
+                                </button>
+                              </div>
+                            );
+                          })()}
+                          
+                        </div>
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* RAW MATERIALS CRITICAL PATH SUMMARY FOR SELECTED PRODUCT */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                    <h4 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                      <Package className="w-4 h-4 text-emerald-700" /> Raw Materials Bill of Materials: {selectedLine?.productName}
+                    </h4>
+                    <span className="text-[10px] font-mono text-slate-400">{selectedLine?.materials?.length || 0} Item(s)</span>
+                  </div>
+
+                  <div className="space-y-2">
+                    {(!selectedLine?.materials || selectedLine.materials.length === 0) ? (
+                      <div className="p-3 bg-slate-50 rounded-xl text-center text-slate-400 text-xs">
+                        Standard materials assigned.
+                      </div>
+                    ) : (
+                      selectedLine.materials.map((mat) => (
+                        <div key={mat.id} className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl flex items-center justify-between text-xs">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-900">{mat.itemCode}</span>
+                              {mat.isCriticalPath && (
+                                <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-800 font-mono text-[9px] font-bold border border-rose-200">
+                                  CRITICAL
+                                </span>
+                              )}
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold border ${
+                                mat.inspectionResult === 'Passed' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-800'
+                              }`}>
+                                GRN: {mat.inspectionResult || 'Pending'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-600 mt-0.5">{mat.description}</p>
+                          </div>
+                          <div className="text-right text-[10px] font-mono text-slate-500">
+                            <div>Supplier: {mat.supplierName}</div>
+                            <div>Lead Time: {mat.leadTimeDays}d | Expected: {mat.expectedDate || 'Pending'}</div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
 
           </div>
 

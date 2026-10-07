@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import type { PurchaseOrder } from '../../types';
 import { ROLE_PERMISSIONS } from '../../types';
-import { X, Wrench, CheckCircle2, Play, Save } from 'lucide-react';
+import { X, Wrench, CheckCircle2, Play, Save, AlertTriangle } from 'lucide-react';
 import { getPOManufacturingStatus } from '../../utils/statusUtils';
-import { clampDateMax, todayLocal } from '../../services/calculationEngine';
+import { clampDateMax, todayLocal, getDaysDifference, mergeDelayReason } from '../../services/calculationEngine';
 
 interface UpdateStatusModalProps {
   isOpen: boolean;
@@ -371,23 +371,73 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
             </div>
           </div>
 
-          {/* Optional Delay Reason Field */}
-          {currentMs && (completionDate > (currentMs.committedBaselineEndDate || '') || summary.isDelayed) && (
-            <div className="space-y-1.5 p-3 bg-amber-50/60 border border-amber-200 rounded-xl">
-              <div className="flex items-center justify-between">
-                <label className="font-bold text-amber-900">
-                  Actual Reason for Delay <span className="text-slate-500 font-normal">(Optional)</span>
-                </label>
-                {previousMs && (
-                  <button
-                    type="button"
-                    onClick={() => setDelayReasonInput(`Delay cascaded from previous stage: ${previousMs.name}${previousMs.delayReason ? ` (${previousMs.delayReason})` : ''}`)}
-                    className="text-[10px] text-emerald-800 hover:text-emerald-950 font-bold underline cursor-pointer"
-                  >
-                    ⚡ Use Previous Milestone Delay
-                  </button>
-                )}
-              </div>
+          {/* Optional Delay Reason Field - Only shown when this specific action or completion date exceeds baseline */}
+          {currentMs && Boolean(currentMs.committedBaselineEndDate && completionDate > currentMs.committedBaselineEndDate) && (
+            <div className="space-y-2 p-3.5 bg-amber-50/80 border border-amber-300 rounded-xl">
+              {(() => {
+                const prevEffectiveEnd = previousMs ? (previousMs.actualEndDate || previousMs.forecastEndDate) : undefined;
+                const prevBaselineEnd = previousMs?.committedBaselineEndDate;
+                const netInheritedDelay = prevEffectiveEnd && prevBaselineEnd
+                  ? Math.max(0, getDaysDifference(prevBaselineEnd, prevEffectiveEnd))
+                  : (previousMs && typeof previousMs.varianceDays === 'number' && previousMs.varianceDays > 0 ? previousMs.varianceDays : 0);
+
+                const prevMilestones = milestones.slice(0, selectedMsIndex);
+                const prevDelaysList = prevMilestones
+                  .map(m => {
+                    let days = 0;
+                    if (m.actualEndDate && m.committedBaselineEndDate) {
+                      days = Math.max(0, getDaysDifference(m.committedBaselineEndDate, m.actualEndDate));
+                    } else if (typeof m.varianceDays === 'number' && m.varianceDays > 0) {
+                      days = m.varianceDays;
+                    }
+                    return { ...m, calculatedDelayDays: days };
+                  })
+                  .filter(m => m.calculatedDelayDays > 0 || (Boolean(m.delayReason) && !m.delayReason?.startsWith('Cascaded') && !m.delayReason?.startsWith('Inherited')));
+
+                return (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <label className="font-bold text-amber-900 text-xs flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
+                        Actual Reason for Delay
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        {netInheritedDelay > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const breakdown = prevDelaysList.map(m => `${m.name} (+${m.calculatedDelayDays}d${m.delayReason ? `: ${m.delayReason}` : ''})`).join('; ');
+                              const sum = `Inherited delay from preceding stages (+${netInheritedDelay}d)${breakdown ? ` [${breakdown}]` : ''}`;
+                              setDelayReasonInput(prev => mergeDelayReason(prev, sum));
+                            }}
+                            className="text-[10px] text-emerald-900 bg-white hover:bg-emerald-50 border border-emerald-300 font-bold px-2 py-0.5 rounded cursor-pointer shadow-2xs"
+                          >
+                            Append Previous Delays (+{netInheritedDelay}d)
+                          </button>
+                        )}
+                        {previousMs && (
+                          <button
+                            type="button"
+                            onClick={() => setDelayReasonInput(`Delay cascaded from previous stage: ${previousMs.name}${previousMs.delayReason ? ` (${previousMs.delayReason})` : ''}`)}
+                            className="text-[10px] text-slate-700 hover:text-slate-900 underline font-medium cursor-pointer"
+                          >
+                            Preceding Stage
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {netInheritedDelay > 0 && prevDelaysList.length > 0 && (
+                      <div className="p-2 bg-amber-100/60 border border-amber-200 rounded-lg space-y-0.5 text-[10px] font-mono text-amber-900">
+                        <div className="font-bold text-amber-950">Preceding Stage Delays:</div>
+                        {prevDelaysList.map((m, i) => (
+                          <div key={i} className="truncate">• Stage {m.stageOrder}. {m.name}: <strong className="text-rose-700">+{m.calculatedDelayDays}d</strong> {m.delayReason ? `("${m.delayReason}")` : m.delayCategory ? `(${m.delayCategory})` : ''}</div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               <input
                 type="text"
                 placeholder="Explain reason for delay (e.g. Casting supplier delay / Hydrostatic re-inspection)..."

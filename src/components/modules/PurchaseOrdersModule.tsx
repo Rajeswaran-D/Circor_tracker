@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import type { PurchaseOrder, DesignType } from '../../types';
-import { Search, Plus, Filter, CheckCircle2, ArrowRight } from 'lucide-react';
+import { Search, Plus, Filter, CheckCircle2, ArrowRight, AlertTriangle } from 'lucide-react';
 
 interface PurchaseOrdersModuleProps {
   onSelectPO: (po: PurchaseOrder) => void;
@@ -230,8 +230,9 @@ export const PurchaseOrdersModule: React.FC<PurchaseOrdersModuleProps> = ({ onSe
 
             <form onSubmit={handleCreateSubmit} className="space-y-3.5 text-xs">
               {createError && (
-                <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg font-medium text-xs">
-                  ⚠️ {createError}
+                <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg font-medium text-xs flex items-center gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>{createError}</span>
                 </div>
               )}
 
@@ -257,9 +258,13 @@ export const PurchaseOrdersModule: React.FC<PurchaseOrdersModuleProps> = ({ onSe
                   <div className="text-[9px] mt-0.5 font-mono">
                     {newPoNumber.trim() ? (
                       purchaseOrders.some(p => p.poNumber.trim().toLowerCase() === newPoNumber.trim().toLowerCase()) ? (
-                        <span className="text-rose-600 font-bold">⚠️ Duplicate: in use</span>
+                        <span className="text-rose-600 font-bold flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3 text-rose-600" /> Duplicate: in use
+                        </span>
                       ) : (
-                        <span className="text-emerald-700 font-semibold">✓ Strictly unique</span>
+                        <span className="text-emerald-700 font-semibold flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Strictly unique
+                        </span>
                       )
                     ) : (
                       <span className="text-slate-400">Auto-assigns next sequential ID</span>

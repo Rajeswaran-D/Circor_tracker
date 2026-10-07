@@ -17,19 +17,31 @@ export const ProcurementModule: React.FC = () => {
   const [grnNumber, setGrnNumber] = useState('');
   const [inspectionResult, setInspectionResult] = useState<'Passed' | 'Rejected' | 'Pending'>('Pending');
   const [inspectionNotes, setInspectionNotes] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'active' | 'all' | 'completed'>('active');
   const [formError, setFormError] = useState('');
 
   const isPurchaseRole = activeRole === 'Project Management' || activeRole === 'Stores (Material Receipt)' || activeRole === 'SCM (Sub-Supplier PO)';
 
+  const filteredOrders = purchaseOrders
+    .filter(po => po.status !== "Baseline Pending")
+    .filter(po => {
+      if (statusFilter === "active") {
+        return !po.isClosed && po.status !== "Completed";
+      }
+      if (statusFilter === "completed") {
+        return po.isClosed || po.status === "Completed";
+      }
+      return true;
+    });
+
+  const activeCount = purchaseOrders.filter(po => po.status !== "Baseline Pending" && !po.isClosed && po.status !== "Completed").length;
+  const completedCount = purchaseOrders.filter(po => po.status !== "Baseline Pending" && (po.isClosed || po.status === "Completed")).length;
+
   const handleOpenEdit = (po: PurchaseOrder, line: ProductLine, mat: MaterialItem) => {
     const rawMs = line.milestones.find(m => m.key === 'raw_material');
     setSelectedMat({ po, line, mat });
-    // A future baseline start must never prefill the ordered date (an order
-    // placement is always in the past) — clamp it to today.
     setOrderedDate(clampDateMax(mat.orderedDate || rawMs?.committedBaselineStartDate || '', today));
     setExpectedDate(mat.expectedDate || rawMs?.committedBaselineEndDate || '');
-    // Never prefill a received date from a future baseline date — an actual
-    // receipt can only be recorded today or earlier.
     setReceivedDate(mat.receivedDate && mat.receivedDate <= today ? mat.receivedDate : '');
     setGrnNumber(mat.grnNumber || '');
     setInspectionResult(mat.inspectionResult || 'Pending');
@@ -68,13 +80,47 @@ export const ProcurementModule: React.FC = () => {
     <div className="p-8 space-y-6 bg-slate-50 text-slate-800">
       
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Raw Material Procurement & GRN Tracker</h1>
           <p className="text-xs text-slate-500 mt-1">Itemized supplier lead times, critical path identification & incoming inspection certificates</p>
         </div>
-        <div className="px-3 py-1 bg-emerald-50 border border-emerald-200 rounded-full text-emerald-800 font-mono text-xs font-semibold">
-          Role: {activeRole} {isPurchaseRole ? '(Authorized)' : '(Read-Only)'}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 bg-slate-200/80 p-1 rounded-xl text-xs">
+            <button
+              onClick={() => setStatusFilter("active")}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                statusFilter === "active"
+                  ? "bg-white text-emerald-800 shadow-xs"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Active ({activeCount})
+            </button>
+            <button
+              onClick={() => setStatusFilter("completed")}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                statusFilter === "completed"
+                  ? "bg-white text-emerald-800 shadow-xs"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              Completed ({completedCount})
+            </button>
+            <button
+              onClick={() => setStatusFilter("all")}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                statusFilter === "all"
+                  ? "bg-white text-emerald-800 shadow-xs"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              All
+            </button>
+          </div>
+          <div className="px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-full text-emerald-800 font-mono text-xs font-semibold">
+            Role: {activeRole} {isPurchaseRole ? '(Authorized)' : '(Read-Only)'}
+          </div>
         </div>
       </div>
 
@@ -96,7 +142,7 @@ export const ProcurementModule: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-800">
-              {purchaseOrders.filter(po => po.status !== "Baseline Pending").flatMap(po => 
+              {filteredOrders.flatMap(po => 
                 po.productLines.flatMap(line => 
                   line.materials.map(mat => (
                     <tr key={mat.id} className="hover:bg-slate-50">

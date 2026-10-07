@@ -72,6 +72,24 @@ interface AppContextType {
     delayReason?: string;
   }) => { success: boolean; error?: string };
 
+  batchUpdateMilestoneEvents: (items: Array<{
+    poId: string;
+    productLineId: string;
+    milestoneKey: string;
+    eventType: 'start' | 'complete';
+    eventDate: string;
+    targetEndDate?: string;
+    user: string;
+    docRef: string;
+    backdateReason?: string;
+    approvalRef?: string;
+    drawingNo?: string;
+    ecnNo?: string;
+    delayCategory?: DelayCategory;
+    delayOwner?: string;
+    delayReason?: string;
+  }>) => { success: boolean; error?: string; count?: number };
+
   acceptMilestone: (params: { poId: string; productLineId: string; milestoneKey: string; user: string }) => { success: boolean; error?: string };
 
   updateOrderStatus: (params: {
@@ -291,7 +309,7 @@ function applyMaterialProgress(line: ProductLine): ProductLine {
         ...ms,
         status: isCompleted ? ('Completed' as MilestoneStatus) : isStarted ? ('In Progress' as MilestoneStatus) : ms.status,
         actualStartDate: ms.actualStartDate || firstOrderedDate,
-        actualEndDate: isCompleted ? (ms.actualEndDate || lastReceivedDate || todayLocal()) : undefined,
+        actualEndDate: isCompleted ? (ms.actualEndDate || lastReceivedDate || todayLocal()) : ms.actualEndDate,
         completionPct: isCompleted ? 100 : isStarted ? Math.max(ms.completionPct || 0, Math.round((receivedMaterials.length / materials.length) * 100)) : ms.completionPct
       };
     }
@@ -720,23 +738,214 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return result;
   };
 
-  const updateMilestoneEvent = ({
-    poId,
-    productLineId,
-    milestoneKey,
-    eventType,
-    eventDate,
-    targetEndDate,
-    user,
-    docRef,
-    backdateReason,
-    approvalRef,
-    drawingNo,
-    ecnNo,
-    delayCategory,
-    delayOwner,
-    delayReason
-  }: {
+  const batchUpdateMilestoneEvents = (items: Array<{
+    poId: string;
+    productLineId: string;
+    milestoneKey: string;
+    eventType: 'start' | 'complete';
+    eventDate: string;
+    targetEndDate?: string;
+    user: string;
+    docRef: string;
+    backdateReason?: string;
+    approvalRef?: string;
+    drawingNo?: string;
+    ecnNo?: string;
+    delayCategory?: DelayCategory;
+    delayOwner?: string;
+    delayReason?: string;
+  }>): { success: boolean; error?: string; count?: number } => {
+    if (items.length === 0) return { success: true, count: 0 };
+    const todayStr = todayLocal();
+
+    // 1. Validate all update items first
+    for (const item of items) {
+      if (!isMilestoneOwnedByRole(item.milestoneKey, activeRole)) {
+        return { success: false, error: 'Unauthorized: You do not have permission to modify this milestone.' };
+      }
+      if (!isValidDateString(item.eventDate)) {
+        return { success: false, error: 'Invalid event date. Expected a valid YYYY-MM-DD date.' };
+      }
+      const po = purchaseOrders.find(p => p.id === item.poId);
+      if (!po) return { success: false, error: 'PO not found' };
+      if (po.isClosed) return { success: false, error: 'Cannot modify closed Purchase Order.' };
+
+      const line = po.productLines.find(l => l.id === item.productLineId);
+      if (!line) return { success: false, error: 'Product Line not found' };
+
+      const ms = line.milestones.find(m => m.key === item.milestoneKey);
+      if (!ms) return { success: false, error: 'Milestone not found' };
+
+      const isDelayedDate = item.eventType === 'start'
+        ? item.eventDate > ms.committedBaselineStartDate
+        : item.eventDate > ms.committedBaselineEndDate;
+      if (isDelayedDate && !item.delayReason?.trim()) {
+        return { success: false, error: `A delay reason is required for ${line.productName} when the date is later than the baseline.` };
+      }
+
+      const currentMsIndex = line.milestones.findIndex(m => m.key === item.milestoneKey);
+      const activeMsIndex = line.milestones.findIndex(m => m.status !== 'Completed' && !m.actualEndDate && m.completionPct !== 100);
+      if (item.eventType === 'start' && (ms.status === 'Completed' || Boolean(ms.actualEndDate) || ms.completionPct === 100)) {
+        return { success: false, error: `Milestone '${ms.name}' on ${line.productName} is already completed.` };
+      }
+      if (currentMsIndex > activeMsIndex && activeMsIndex >= 0) {
+        const activeMs = line.milestones[activeMsIndex];
+        return {
+          success: false,
+          error: `Sequence Validation Failure: Complete '${activeMs?.name || 'the current milestone'}' before updating '${ms.name}'.`
+        };
+      }
+      if (currentMsIndex > 0) {
+        const prevMs = line.milestones[currentMsIndex - 1];
+        const isPrevComplete = prevMs.status === 'Completed' || Boolean(prevMs.actualEndDate) || prevMs.completionPct === 100;
+        if (item.eventType === 'complete' && !isPrevComplete) {
+          return {
+            success: false,
+            error: `Sequence Validation Failure: Milestone '${prevMs.name}' must be marked Completed before '${ms.name}' can be completed.`
+          };
+        }
+      }
+
+      const dateCheck = validateEventDate({
+        milestones: line.milestones,
+        index: currentMsIndex,
+        eventType: item.eventType,
+        eventDate: item.eventDate,
+        todayStr
+      });
+      if (!dateCheck.ok) {
+        return { success: false, error: `${line.productName}: ${dateCheck.error}` };
+      }
+
+      if (item.eventType === 'complete' && item.milestoneKey === 'raw_material') {
+        const missingReceipt = line.materials.filter(material => !material.receivedDate);
+        if (missingReceipt.length > 0) {
+          return { success: false, error: 'Raw Material Procurement can be completed only after every material is marked Received in Raw Materials.' };
+        }
+      }
+      if (item.eventType === 'complete' && item.milestoneKey === 'incoming_inspection') {
+        const pendingInspection = line.materials.filter(material => material.inspectionResult !== 'Passed');
+        if (pendingInspection.length > 0) {
+          return { success: false, error: 'Incoming Inspection can be completed only after every material is marked Passed in Raw Materials.' };
+        }
+      }
+      if (item.milestoneKey === 'production' && item.eventType === 'start') {
+        const designMs = line.milestones.find(m => m.key === 'design_approval');
+        if (designMs && designMs.status !== 'Completed') {
+          return {
+            success: false,
+            error: `Dependency Violation: Production cannot start because Design Stage '${designMs.name}' is not yet completed/approved.`
+          };
+        }
+        const pendingCritical = line.materials.filter(m => m.isCriticalPath && m.inspectionResult !== 'Passed');
+        if (pendingCritical.length > 0) {
+          return {
+            success: false,
+            error: `Dependency Violation: Critical path materials pending GRN passed inspection: ${pendingCritical.map(m=>m.itemCode).join(', ')}.`
+          };
+        }
+      }
+    }
+
+    // 2. Perform atomic batch update across all targeted POs and product lines
+    const updatedPOs = purchaseOrders.map(p => {
+      const itemsForPO = items.filter(it => it.poId === p.id);
+      if (itemsForPO.length === 0) return p;
+
+      const updatedLines = p.productLines.map(l => {
+        const item = itemsForPO.find(it => it.productLineId === l.id);
+        if (!item) return l;
+
+        const currentMsIndex = l.milestones.findIndex(m => m.key === item.milestoneKey);
+        let updatedMsList = l.milestones.map(m => {
+          if (m.key !== item.milestoneKey) return m;
+
+          const newMs = { ...m };
+          if (item.eventType === 'start') {
+            newMs.actualStartDate = item.eventDate;
+            newMs.forecastStartDate = item.eventDate;
+            newMs.forecastEndDate = item.targetEndDate || m.actualEndDate || addDays(item.eventDate, m.committedDurationDays);
+            newMs.status = 'In Progress' as MilestoneStatus;
+          } else {
+            if (!newMs.actualStartDate) {
+              const anchor = chainAnchorDate(l.milestones, currentMsIndex, todayStr);
+              newMs.actualStartDate = anchor && anchor <= item.eventDate ? anchor : item.eventDate;
+            }
+            newMs.actualEndDate = item.eventDate;
+            newMs.forecastEndDate = item.eventDate;
+            newMs.status = 'Completed' as MilestoneStatus;
+            newMs.completionPct = 100;
+          }
+
+          if (item.approvalRef) newMs.approvalReference = item.approvalRef;
+          if (item.drawingNo) newMs.drawingNumber = item.drawingNo;
+          if (item.ecnNo) newMs.ecnNumber = item.ecnNo;
+          if (item.delayCategory) newMs.delayCategory = item.delayCategory;
+          if (item.delayOwner) newMs.delayOwner = item.delayOwner;
+          if (item.delayReason) newMs.delayReason = item.delayReason;
+
+          newMs.lastUpdatedBy = item.user;
+          newMs.lastUpdatedAt = new Date().toISOString();
+          newMs.docRef = item.docRef;
+          if (item.backdateReason) newMs.backdateReason = item.backdateReason;
+
+          return newMs;
+        });
+
+        // After completing, cascade the completion date into the next milestone's start
+        if (item.eventType === 'complete') {
+          updatedMsList = cascadeNextMilestoneStart(updatedMsList, currentMsIndex, item.eventDate, item.user);
+        }
+
+        const syncedLine = applyMaterialProgress({ ...l, milestones: updatedMsList });
+        const tempLine = { ...syncedLine };
+        return recalculateProductLine(tempLine, todayStr, config.atRiskThresholdDays, config.delayedThresholdDays);
+      });
+
+      return {
+        ...p,
+        status: getPurchaseOrderStatus(updatedLines, p.isClosed),
+        productLines: updatedLines,
+        lastUpdatedBy: itemsForPO[0]?.user || activeRole,
+        lastUpdatedAt: new Date().toISOString()
+      };
+    });
+
+    setPurchaseOrders(updatedPOs);
+    persistState('cft_pos', updatedPOs);
+
+    // 3. Log audit events & check rectifications for each updated line
+    for (const item of items) {
+      const po = purchaseOrders.find(p => p.id === item.poId);
+      const line = po?.productLines.find(l => l.id === item.productLineId);
+      const ms = line?.milestones.find(m => m.key === item.milestoneKey);
+      if (po && line && ms) {
+        addAudit(
+          item.user,
+          activeRole,
+          po.poNumber,
+          item.eventType === 'start' ? `START_MILESTONE_${item.milestoneKey.toUpperCase()}` : `COMPLETE_MILESTONE_${item.milestoneKey.toUpperCase()}`,
+          item.docRef,
+          `Marked milestone ${ms.name} on ${line.productName} as ${item.eventType === 'start' ? 'Started' : 'Completed'} on date ${item.eventDate}.`,
+          line.lineNumber,
+          item.backdateReason
+        );
+
+        if (item.delayCategory) {
+          const updatedLine = updatedPOs.find(p=>p.id===item.poId)?.productLines.find(l=>l.id===item.productLineId);
+          const updatedMs = updatedLine?.milestones.find(m=>m.key===item.milestoneKey);
+          if (updatedMs && (updatedMs.status === 'At Risk' || updatedMs.status === 'Delayed')) {
+            const newRects = generateSuggestedRectifications(po.poNumber, updatedLine!, updatedMs, item.delayCategory);
+            setRectifications(prev => [...newRects, ...prev]);
+          }
+        }
+      }
+    }
+
+    return { success: true, count: items.length };
+  };
+
+  const updateMilestoneEvent = (params: {
     poId: string;
     productLineId: string;
     milestoneKey: string;
@@ -753,187 +962,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     delayOwner?: string;
     delayReason?: string;
   }) => {
-    if (!isMilestoneOwnedByRole(milestoneKey, activeRole)) {
-      return { success: false, error: 'Unauthorized: You do not have permission to modify this milestone.' };
-    }
-    const todayStr = todayLocal();
-    if (!isValidDateString(eventDate)) {
-      return { success: false, error: 'Invalid event date. Expected a valid YYYY-MM-DD date.' };
-    }
-    const po = purchaseOrders.find(p => p.id === poId);
-    if (!po) return { success: false, error: 'PO not found' };
-    if (po.isClosed) return { success: false, error: 'Cannot modify closed Purchase Order.' };
-
-    const line = po.productLines.find(l => l.id === productLineId);
-    if (!line) return { success: false, error: 'Product Line not found' };
-
-    const ms = line.milestones.find(m => m.key === milestoneKey);
-    if (!ms) return { success: false, error: 'Milestone not found' };
-
-    // Delay is driven by the ACTUAL event date for this action only. The target
-    // end date belongs to the plan and must never, on its own, force a started
-    // milestone into 'Delayed' (that is what stopped 'IN EXECUTION' rendering).
-    const isDelayedDate = eventType === 'start'
-      ? eventDate > ms.committedBaselineStartDate
-      : eventDate > ms.committedBaselineEndDate;
-    if (isDelayedDate && !delayReason?.trim()) {
-      return { success: false, error: 'A delay reason is required when the actual or target date is later than the baseline.' };
-    }
-
-    const currentMsIndex = line.milestones.findIndex(m => m.key === milestoneKey);
-    const activeMsIndex = line.milestones.findIndex(m => m.status !== 'Completed');
-    if (eventType === 'start' && ms.status === 'Completed') {
-      return { success: false, error: `Milestone '${ms.name}' is already completed.` };
-    }
-    // Only check sequence if trying to jump ahead past preceding uncompleted milestones
-    if (currentMsIndex > activeMsIndex && activeMsIndex >= 0) {
-      const activeMs = line.milestones[activeMsIndex];
-      return {
-        success: false,
-        error: `Sequence Validation Failure: Complete '${activeMs?.name || 'the current milestone'}' before updating '${ms.name}'.`
-      };
-    }
-
-    // Sequence: a milestone can only be completed once its predecessor is done.
-    if (currentMsIndex > 0) {
-      const prevMs = line.milestones[currentMsIndex - 1];
-      if (eventType === 'complete' && prevMs.status !== 'Completed') {
-        return {
-          success: false,
-          error: `Sequence Validation Failure: Milestone '${prevMs.name}' must be marked Completed before '${ms.name}' can be completed.`
-        };
-      }
-    }
-
-    // Date chain: one shared validator for every entry point, so the error the
-    // user sees is exactly the rule that is enforced. A previous milestone's
-    // still-future plan is never a floor (that would leave no selectable date).
-    const dateCheck = validateEventDate({
-      milestones: line.milestones,
-      index: currentMsIndex,
-      eventType,
-      eventDate,
-      todayStr
-    });
-    if (!dateCheck.ok) {
-      return { success: false, error: dateCheck.error };
-    }
-
-    if (eventType === 'complete' && milestoneKey === 'raw_material') {
-      const missingReceipt = line.materials.filter(material => !material.receivedDate);
-      if (missingReceipt.length > 0) {
-        return { success: false, error: 'Raw Material Procurement can be completed only after every material is marked Received in Raw Materials.' };
-      }
-    }
-    if (eventType === 'complete' && milestoneKey === 'incoming_inspection') {
-      const pendingInspection = line.materials.filter(material => material.inspectionResult !== 'Passed');
-      if (pendingInspection.length > 0) {
-        return { success: false, error: 'Incoming Inspection can be completed only after every material is marked Passed in Raw Materials.' };
-      }
-    }
-
-    if (milestoneKey === 'production' && eventType === 'start') {
-      const designMs = line.milestones.find(m => m.key === 'design_approval');
-      if (designMs && designMs.status !== 'Completed') {
-        return {
-          success: false,
-          error: `Dependency Violation: Production cannot start because Design Stage '${designMs.name}' is not yet completed/approved.`
-        };
-      }
-
-      const pendingCritical = line.materials.filter(m => m.isCriticalPath && m.inspectionResult !== 'Passed');
-      if (pendingCritical.length > 0) {
-        return {
-          success: false,
-          error: `Dependency Violation: Critical path materials pending GRN passed inspection: ${pendingCritical.map(m=>m.itemCode).join(', ')}.`
-        };
-      }
-    }
-
-    const updatedPOs = purchaseOrders.map(p => {
-      if (p.id !== poId) return p;
-      const updatedLines = p.productLines.map(l => {
-        if (l.id !== productLineId) return l;
-
-        let updatedMsList = l.milestones.map(m => {
-          if (m.key !== milestoneKey) return m;
-
-          const newMs = { ...m };
-          if (eventType === 'start') {
-            newMs.actualStartDate = eventDate;
-            newMs.forecastStartDate = eventDate;
-            newMs.forecastEndDate = targetEndDate || m.actualEndDate || addDays(eventDate, m.committedDurationDays);
-            newMs.status = 'In Progress' as MilestoneStatus;
-          } else {
-            // On complete: if no actualStartDate exists, derive it from the
-            // chain anchor, but never after the recorded completion date.
-            if (!newMs.actualStartDate) {
-              const anchor = chainAnchorDate(l.milestones, currentMsIndex, todayStr);
-              newMs.actualStartDate = anchor && anchor <= eventDate ? anchor : eventDate;
-            }
-            newMs.actualEndDate = eventDate;
-            newMs.forecastEndDate = eventDate;
-            newMs.status = 'Completed' as MilestoneStatus;
-            newMs.completionPct = 100;
-          }
-
-          if (approvalRef) newMs.approvalReference = approvalRef;
-          if (drawingNo) newMs.drawingNumber = drawingNo;
-          if (ecnNo) newMs.ecnNumber = ecnNo;
-          if (delayCategory) newMs.delayCategory = delayCategory;
-          if (delayOwner) newMs.delayOwner = delayOwner;
-          if (delayReason) newMs.delayReason = delayReason;
-
-          newMs.lastUpdatedBy = user;
-          newMs.lastUpdatedAt = new Date().toISOString();
-          newMs.docRef = docRef;
-          if (backdateReason) newMs.backdateReason = backdateReason;
-
-          return newMs;
-        });
-
-        // After completing, cascade the completion date into the next milestone's start
-        if (eventType === 'complete') {
-          updatedMsList = cascadeNextMilestoneStart(updatedMsList, currentMsIndex, eventDate, user);
-        }
-
-        // Keep material-driven milestones converged with receipt progress.
-        const syncedLine = applyMaterialProgress({ ...l, milestones: updatedMsList });
-        const tempLine = { ...syncedLine };
-        return recalculateProductLine(tempLine, todayStr, config.atRiskThresholdDays, config.delayedThresholdDays);
-      });
-
-      return {
-        ...p,
-        status: getPurchaseOrderStatus(updatedLines, p.isClosed),
-        productLines: updatedLines,
-        lastUpdatedBy: user,
-        lastUpdatedAt: new Date().toISOString()
-      };
-    });
-
-    setPurchaseOrders(updatedPOs);
-    persistState('cft_pos', updatedPOs);
-
-    addAudit(
-      user,
-      activeRole,
-      po.poNumber,
-      eventType === 'start' ? `START_MILESTONE_${milestoneKey.toUpperCase()}` : `COMPLETE_MILESTONE_${milestoneKey.toUpperCase()}`,
-      docRef,
-      `Marked milestone ${ms.name} as ${eventType === 'start' ? 'Started' : 'Completed'} on date ${eventDate}.`,
-      line.lineNumber,
-      backdateReason
-    );
-
-    const updatedLine = updatedPOs.find(p=>p.id===poId)?.productLines.find(l=>l.id===productLineId);
-    const updatedMs = updatedLine?.milestones.find(m=>m.key===milestoneKey);
-    if (updatedMs && (updatedMs.status === 'At Risk' || updatedMs.status === 'Delayed') && delayCategory) {
-      const newRects = generateSuggestedRectifications(po.poNumber, updatedLine!, updatedMs, delayCategory);
-      setRectifications(prev => [...newRects, ...prev]);
-    }
-
-    return { success: true };
+    return batchUpdateMilestoneEvents([params]);
   };
 
   const updateOrderStatus = ({
@@ -1569,11 +1598,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const todayStr = todayLocal();
     const effectivePoDate = newPoData.poDate && isValidDateString(newPoData.poDate) ? newPoData.poDate : todayStr;
 
-    const productLines = (newPoData.productLines || []).map((line, idx) => {
+    // Build initial product lines with raw materials
+    const rawLines = (newPoData.productLines || []).map((line, idx) => {
       const lineId = `line-${id}-${idx + 1}`;
       const designType = line.designType || 'Existing Design';
-      // Prefer an exact category+design match, then any template for the same
-      // design type — never silently apply the opposite design's schedule.
       const tmpl = templates.find(t => t.categoryName === line.category && t.designType === designType)
         || templates.find(t => t.designType === designType)
         || templates[0];
@@ -1586,12 +1614,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         lineId
       });
 
-      const milestones = buildTemplateSchedule({
-        template: tmpl,
+      return {
+        lineId,
+        lineNumber: `LINE-${String(idx + 1).padStart(2, '0')}`,
+        productName: line.productName || 'Standard Flow Valve Line',
+        category: line.category || 'High-Pressure Control Valves',
+        qty: line.qty || 1,
         designType,
         materials: lineMaterials,
+        template: tmpl
+      };
+    });
+
+    // Derive unified PO Master Baseline duration envelope across all products
+    const maxMatLeadTime = Math.max(
+      ...rawLines.flatMap(l => l.materials.map(m => m.leadTimeDays)),
+      14
+    );
+
+    const masterProductLines = rawLines.map((raw) => {
+      const milestones = buildTemplateSchedule({
+        template: raw.template,
+        designType: raw.designType,
+        materials: raw.materials.length > 0 ? raw.materials : [{ leadTimeDays: maxMatLeadTime } as any],
         startDate: effectivePoDate,
-        lineId
+        lineId: raw.lineId
       });
 
       // Milestone 1 (Customer Purchase Order Intake) is completed upon order creation in the PO module
@@ -1611,24 +1658,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return m;
       });
 
-      // Cascade the completed date of Milestone 1 to downstream stages
       const cascadedMilestones = cascadeNextMilestoneStart(initialMilestones, 0, effectivePoDate, activeRole);
 
       const tempLine = {
-        id: lineId,
-        lineNumber: `LINE-${String(idx + 1).padStart(2, '0')}`,
-        productName: line.productName || 'Standard Flow Valve Line',
-        category: line.category || 'High-Pressure Control Valves',
-        qty: line.qty || 1,
-        designType,
+        id: raw.lineId,
+        lineNumber: raw.lineNumber,
+        productName: raw.productName,
+        category: raw.category,
+        qty: raw.qty,
+        designType: raw.designType,
         milestones: cascadedMilestones,
-        materials: lineMaterials,
+        materials: raw.materials,
         overallVarianceDays: 0,
         status: 'In Progress' as MilestoneStatus
       };
 
       return recalculateProductLine(tempLine, todayStr, config.atRiskThresholdDays, config.delayedThresholdDays);
     });
+
+    const productLines = masterProductLines;
 
     // The committed delivery date must cover the SLOWEST line, not just line 1.
     const calculatedDeliveryDate = getOrderDeliveryDate(productLines, effectivePoDate);
@@ -2110,6 +2158,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       deleteProduct,
       acceptMilestone,
       updateMilestoneEvent,
+      batchUpdateMilestoneEvents,
       updateOrderStatus,
       updateMaterialItem,
       addBaselineRevision,

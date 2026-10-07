@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useApp } from "../../context/AppContext";
-import { Truck, CheckCircle2, ChevronDown, ChevronUp, Package, AlertTriangle, Edit3 } from "lucide-react";
+import { Truck, CheckCircle2, ChevronDown, ChevronUp, Package, AlertTriangle, Edit3, Calendar } from "lucide-react";
 import type { PurchaseOrder, ProductLine, Milestone } from "../../types";
 import { isMilestoneOwnedByRole } from "../../types";
 import { getPOManufacturingStatus } from "../../utils/statusUtils";
@@ -14,6 +14,7 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
   const [expandedPO, setExpandedPO] = useState<string | null>(null);
   const [closingPO, setClosingPO] = useState<string | null>(null);
   const [closureNotes, setClosureNotes] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"active" | "all" | "completed">("active");
   const [successMsg, setSuccessMsg] = useState("");
 
   const deliveryKeys = ["shipment", "dispatch", "delivery", "trn"];
@@ -28,6 +29,21 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
   };
 
   const canManageStage = isMilestoneOwnedByRole('shipment', activeRole);
+
+  const filteredOrders = purchaseOrders
+    .filter(po => po.status !== "Baseline Pending")
+    .filter(po => {
+      if (statusFilter === "active") {
+        return !po.isClosed && po.status !== "Completed";
+      }
+      if (statusFilter === "completed") {
+        return po.isClosed || po.status === "Completed";
+      }
+      return true;
+    });
+
+  const activeCount = purchaseOrders.filter(po => po.status !== "Baseline Pending" && !po.isClosed && po.status !== "Completed").length;
+  const completedCount = purchaseOrders.filter(po => po.status !== "Baseline Pending" && (po.isClosed || po.status === "Completed")).length;
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
@@ -52,6 +68,40 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
             Track packing clearance, customs dispatch, site delivery confirmation, and close completed orders.
           </p>
         </div>
+
+        {/* Filter Badges */}
+        <div className="flex items-center gap-1.5 bg-black/30 p-1.5 rounded-xl border border-white/10 text-xs">
+          <button
+            onClick={() => setStatusFilter("active")}
+            className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+              statusFilter === "active"
+                ? "bg-emerald-600 text-white shadow-xs"
+                : "text-slate-300 hover:text-white"
+            }`}
+          >
+            Active Queue ({activeCount})
+          </button>
+          <button
+            onClick={() => setStatusFilter("completed")}
+            className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+              statusFilter === "completed"
+                ? "bg-emerald-600 text-white shadow-xs"
+                : "text-slate-300 hover:text-white"
+            }`}
+          >
+            Completed ({completedCount})
+          </button>
+          <button
+            onClick={() => setStatusFilter("all")}
+            className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+              statusFilter === "all"
+                ? "bg-emerald-600 text-white shadow-xs"
+                : "text-slate-300 hover:text-white"
+            }`}
+          >
+            All
+          </button>
+        </div>
       </div>
 
       {successMsg && (
@@ -68,7 +118,11 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
           </div>
         </div>
         <div className="divide-y divide-slate-100">
-          {purchaseOrders.filter(po => po.status !== "Baseline Pending").map(po => {
+          {filteredOrders.length === 0 ? (
+            <div className="p-8 text-center text-slate-500 text-xs font-medium">
+              No orders found in this view.
+            </div>
+          ) : filteredOrders.map(po => {
             const isExpanded = expandedPO === po.id;
             const isClosed = po.isClosed;
             const statusSummary = getPOManufacturingStatus(po);
@@ -83,7 +137,7 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
                     <span className="font-mono font-bold text-emerald-800 text-sm">{po.poNumber}</span>
                     <span className="font-semibold text-slate-900">{po.customerName}</span>
                     <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 text-xs font-mono">
-                      📅 {po.poDate} &rarr; <strong className="text-emerald-800">{po.revisedDeliveryDate || po.committedDeliveryDate}</strong>
+                      <Calendar className="w-3 h-3 text-slate-500" /> {po.poDate} &rarr; <strong className="text-emerald-800">{po.revisedDeliveryDate || po.committedDeliveryDate}</strong>
                     </span>
                     {isClosed ? (
                       <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-600 border border-slate-300">
@@ -181,7 +235,7 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
                                               Mark Complete
                                             </button>
                                           ) : (
-                                            <span className="text-[11px] font-semibold text-emerald-700">✓ Completed</span>
+                                            <span className="text-[11px] font-semibold text-emerald-700">Completed</span>
                                           )}
                                         </div>
                                       )}
@@ -196,8 +250,8 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
                     })}
 
                     {!isClosed && (() => {
-                      const allMilestonesComplete = po.productLines.every(line =>
-                        line.milestones.every(m => m.status === "Completed" || Boolean(m.actualEndDate))
+                      const allMilestonesComplete = po.productLines.length > 0 && po.productLines.every(line =>
+                        line.milestones.every(m => m.status === "Completed" || Boolean(m.actualEndDate) || m.completionPct === 100)
                       );
 
                       return (

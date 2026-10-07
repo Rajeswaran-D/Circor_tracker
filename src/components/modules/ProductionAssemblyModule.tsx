@@ -127,7 +127,7 @@ export const ProductionAssemblyModule: React.FC<ProductionModuleSimpleProps> = (
 
                       const assemblyMsIndex = line.milestones.findIndex(m => m.key === "assembly" || m.key === "production");
                       const previousMs = assemblyMsIndex > 0 ? line.milestones[assemblyMsIndex - 1] : undefined;
-                      const isPreviousCompleted = !previousMs || previousMs.status === "Completed";
+                      const isPreviousCompleted = !previousMs || previousMs.status === "Completed" || Boolean(previousMs.actualEndDate) || previousMs.completionPct === 100;
                       
                       const assemblyMs = line.milestones.find(m => m.key === "assembly" || m.key === "production") || line.milestones[0];
                       const isRoleAuthorized = isMilestoneOwnedByRole("assembly", activeRole);
@@ -246,7 +246,7 @@ export const ProductionAssemblyModule: React.FC<ProductionModuleSimpleProps> = (
                                   {/* Completion Action */}
                                   <div className="flex items-center justify-between pt-2">
                                     <div className="text-[11px] text-slate-500 font-mono">
-                                      {!isPreviousCompleted ? "🔒 Unlocks when previous milestone is done." : !isRoleAuthorized ? "👁️ Read-only mode for current role." : "Authorized to mark sub-assembly complete."}
+                                      {!isPreviousCompleted ? "Unlocks when previous milestone is done." : !isRoleAuthorized ? "Read-only mode for current role." : "Authorized to mark sub-assembly complete."}
                                     </div>
 
                                     {isPreviousCompleted && isRoleAuthorized && !po.isClosed && (

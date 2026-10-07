@@ -106,7 +106,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const allNavItems: { name: ModuleType; icon: React.ReactNode; badge?: number; badgeColor?: string; step: string }[] = [
     { name: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, step: '1' },
-    { name: 'Administration & Governance', icon: <Settings className="w-4 h-4" />, step: '⚙️' },
+    { name: 'Administration & Governance', icon: <Settings className="w-4 h-4" />, step: 'ADM' },
     { name: '1. Customer Purchase Order (PO)', icon: <FilePlus2 className="w-4 h-4" />, step: '2' },
     { name: '2. Baseline Review & Planning', icon: <FilePlus2 className="w-4 h-4" />, step: '3' },
     { name: '3. CORB Release', icon: <FilePlus2 className="w-4 h-4" />, step: '4' },
@@ -225,7 +225,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-4 border-t border-slate-100 bg-slate-50/70 text-[11px] text-slate-500 space-y-2">
         <div className="flex justify-between items-center text-[10px] font-mono">
           <span>PLANT SITE:</span>
-          <span className="text-slate-800 font-bold">CICOR PLANT 01</span>
+          <span className="text-slate-800 font-bold">CIRCOR PLANT 01</span>
         </div>
         <div className="flex justify-between items-center text-[10px] font-mono">
           <span>OPERATOR MODE:</span>
