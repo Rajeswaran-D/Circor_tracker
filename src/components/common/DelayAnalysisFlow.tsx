@@ -27,6 +27,10 @@ export interface DelayStep {
   delayReason?: string;
   plannedDates: { start: string; end: string; duration: number };
   actualDates: { start?: string; end?: string; duration?: number };
+  productLineName?: string;
+  lineNumber?: string;
+  productLineId?: string;
+  affectedProducts?: { lineId: string; lineNumber: string; productName: string; varianceDays: number; delayReason?: string }[];
 }
 
 /**
@@ -91,7 +95,11 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
         delayCategory: ms.delayCategory,
         delayReason: ms.delayReason,
         plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
-        actualDates: { start: actualStart, end: actualEnd, duration: actualDuration }
+        actualDates: { start: actualStart, end: actualEnd, duration: actualDuration },
+        productLineName: line.productName,
+        lineNumber: line.lineNumber,
+        productLineId: line.id,
+        affectedProducts: [{ lineId: line.id, lineNumber: line.lineNumber, productName: line.productName, varianceDays: activeVariance, delayReason: ms.delayReason }]
       };
 
       delaySteps.push(step);
@@ -116,7 +124,11 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
         delayCategory: ms.delayCategory,
         delayReason: ms.delayReason || `${recoveredDays}d recovered on this stage`,
         plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
-        actualDates: { start: actualStart, end: actualEnd, duration: actualDuration }
+        actualDates: { start: actualStart, end: actualEnd, duration: actualDuration },
+        productLineName: line.productName,
+        lineNumber: line.lineNumber,
+        productLineId: line.id,
+        affectedProducts: [{ lineId: line.id, lineNumber: line.lineNumber, productName: line.productName, varianceDays: activeVariance }]
       };
 
       delaySteps.push(step);
@@ -139,7 +151,11 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
         delayCategory: ms.delayCategory,
         delayReason: ms.delayReason,
         plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
-        actualDates: { start: actualStart, end: actualEnd, duration: actualDuration }
+        actualDates: { start: actualStart, end: actualEnd, duration: actualDuration },
+        productLineName: line.productName,
+        lineNumber: line.lineNumber,
+        productLineId: line.id,
+        affectedProducts: [{ lineId: line.id, lineNumber: line.lineNumber, productName: line.productName, varianceDays: activeVariance, delayReason: ms.delayReason }]
       };
 
       delaySteps.push(step);
@@ -236,18 +252,38 @@ export function extractDelayFlow(po: PurchaseOrder, targetLineId?: string): {
   const maxDaysDelayed = Math.max(...allLineResults.map(r => r.totalDaysDelayed), 0);
   const maxDaysRecovered = Math.max(...allLineResults.map(r => r.totalDaysRecovered), 0);
 
-  // Combine unique delayed steps across lines
+  // Combine unique delayed steps across lines and attach all affected products
   const stepMap = new Map<string, DelayStep>();
+  const affectedProductsMap = new Map<string, { lineId: string; lineNumber: string; productName: string; varianceDays: number; delayReason?: string }[]>();
+
   delayedLineResults.forEach(res => {
     res.delaySteps.forEach(step => {
       const existing = stepMap.get(step.stageKey);
       if (!existing || Math.abs(step.stageDelayAdded) > Math.abs(existing.stageDelayAdded)) {
-        stepMap.set(step.stageKey, step);
+        stepMap.set(step.stageKey, { ...step });
+      }
+
+      if (step.productLineId && step.productLineName) {
+        const list = affectedProductsMap.get(step.stageKey) || [];
+        if (!list.some(p => p.lineId === step.productLineId)) {
+          list.push({
+            lineId: step.productLineId,
+            lineNumber: step.lineNumber || '',
+            productName: step.productLineName,
+            varianceDays: step.varianceDays,
+            delayReason: step.delayReason
+          });
+          affectedProductsMap.set(step.stageKey, list);
+        }
       }
     });
   });
 
-  const combinedDelaySteps = Array.from(stepMap.values()).sort((a, b) => a.stageOrder - b.stageOrder);
+  const combinedDelaySteps = Array.from(stepMap.values()).map(step => ({
+    ...step,
+    affectedProducts: affectedProductsMap.get(step.stageKey) || step.affectedProducts || []
+  })).sort((a, b) => a.stageOrder - b.stageOrder);
+
   const combinedNonRecovery = combinedDelaySteps.filter(s => !s.isRecovery);
   const stepWithExplicitReason = combinedNonRecovery.find(s => s.delayReason && !s.delayReason.startsWith('Cascaded') && !s.delayReason.startsWith('Inherited'));
   const stepWithMaxAddedDelay = [...combinedNonRecovery].sort((a, b) => (b.stageDelayAdded || 0) - (a.stageDelayAdded || 0))[0];
@@ -452,17 +488,43 @@ export const DelayAnalysisFlow: React.FC<DelayAnalysisFlowProps> = ({
                     </div>
                   </div>
 
+                  {/* Product Causing the Delay / Variance */}
+                  {step.affectedProducts && step.affectedProducts.length > 0 ? (
+                    <div className="flex items-center gap-1.5 flex-wrap pt-1 text-[11px]">
+                      <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500">Affected Product:</span>
+                      {step.affectedProducts.map(p => (
+                        <span key={p.lineId} className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-indigo-50 text-indigo-900 border border-indigo-200 flex items-center gap-1">
+                          <span className="text-indigo-600 font-semibold">{p.lineNumber ? `${p.lineNumber}:` : ''}</span>
+                          <span className="font-bold">{p.productName}</span>
+                          <span className="text-rose-700">(+{p.varianceDays}d)</span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : step.productLineName ? (
+                    <div className="flex items-center gap-1.5 flex-wrap pt-1 text-[11px]">
+                      <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500">Affected Product:</span>
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-indigo-50 text-indigo-900 border border-indigo-200">
+                        {step.lineNumber ? `${step.lineNumber}: ` : ''}{step.productLineName}
+                      </span>
+                    </div>
+                  ) : null}
+
                   {/* Delay Reason Explanation */}
                   {step.delayReason && (
                     <div className="pt-2 border-t border-slate-100 text-xs text-slate-800 flex items-start gap-2 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
                       <AlertCircle className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${isRecovery ? 'text-emerald-600' : 'text-rose-500'}`} />
-                      <div>
+                      <div className="space-y-0.5">
                         <span className={`text-[10px] font-mono font-bold uppercase tracking-wider block ${isRecovery ? 'text-emerald-700' : 'text-rose-700'}`}>
-                          {isRecovery ? 'Recovery Note:' : 'Reason / Notes:'}
+                          {isRecovery ? 'Recovery Note:' : 'Reason / Root Cause:'}
                         </span>
                         <span className="font-medium text-slate-900 text-xs leading-relaxed">
                           {step.delayReason}
                         </span>
+                        {step.productLineName && (
+                          <span className="text-[10px] text-slate-500 font-mono block pt-0.5">
+                            Recorded on: <strong className="text-slate-800">{step.lineNumber ? `${step.lineNumber} - ` : ''}{step.productLineName}</strong>
+                          </span>
+                        )}
                       </div>
                     </div>
                   )}

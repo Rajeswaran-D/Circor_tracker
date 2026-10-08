@@ -367,7 +367,6 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
             </label>
             <input
               type="date"
-              min={inputMin}
               value={completionDate || today}
               onChange={(e) => setCompletionDate(e.target.value)}
               className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-medium text-slate-900 focus:outline-none focus:border-emerald-600 text-xs font-mono"

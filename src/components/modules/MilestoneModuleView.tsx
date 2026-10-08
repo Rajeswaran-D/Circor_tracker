@@ -119,7 +119,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
   const canManageStage = isMilestoneOwnedByRole(stageKey, activeRole);
   const todayStr = new Date().toISOString().split('T')[0];
 
-  const togglePOExpand = (poId: string, defaultOpen = true) => {
+  const togglePOExpand = (poId: string, defaultOpen = false) => {
     setExpandedPOs(prev => {
       const current = prev[poId] !== undefined ? prev[poId] : defaultOpen;
       return {
@@ -129,7 +129,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
     });
   };
 
-  const isPOExpanded = (poId: string, defaultOpen = true) => {
+  const isPOExpanded = (poId: string, defaultOpen = false) => {
     return expandedPOs[poId] !== undefined ? expandedPOs[poId] : defaultOpen;
   };
 
@@ -451,11 +451,35 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
       if (msIndex < 0) continue;
 
       const targetMs = line.milestones[msIndex];
-      const baselineLimit = eventType === 'start' ? (targetMs.committedBaselineStartDate || targetPO.poDate) : (targetMs.committedBaselineEndDate || targetPO.committedDeliveryDate);
-      const isDelayed = eventDate > baselineLimit;
+      const prevMs = msIndex > 0 ? line.milestones[msIndex - 1] : null;
+      const prevEnd = prevMs?.actualEndDate || prevMs?.forecastEndDate;
+      const baselineStart = targetMs.committedBaselineStartDate || targetPO.poDate;
+      const baselineEnd = targetMs.committedBaselineEndDate || targetPO.committedDeliveryDate;
 
-      const delayReasonToUse = isDelayed ? (batchModal.delayReason.trim() || undefined) : undefined;
-      const delayCategoryToUse = isDelayed ? (batchModal.delayCategory || undefined) : undefined;
+      let newDelayFormed = 0;
+      if (eventType === 'start') {
+        const totalDelay = (baselineStart && eventDate && eventDate > baselineStart) ? getDaysDifference(baselineStart, eventDate) : 0;
+        const inheritedDelay = (baselineStart && prevEnd && prevEnd > baselineStart) ? Math.min(totalDelay, getDaysDifference(baselineStart, prevEnd)) : 0;
+        newDelayFormed = Math.max(0, totalDelay - inheritedDelay);
+      } else {
+        const totalDelay = (baselineEnd && eventDate && eventDate > baselineEnd) ? getDaysDifference(baselineEnd, eventDate) : 0;
+        const effectiveStart = targetMs.actualStartDate || ((baselineStart && prevEnd && prevEnd > baselineStart) ? prevEnd : baselineStart);
+        const startDelay = (baselineStart && effectiveStart && effectiveStart > baselineStart) ? getDaysDifference(baselineStart, effectiveStart) : 0;
+        const inheritedDelay = Math.min(totalDelay, startDelay);
+        newDelayFormed = Math.max(0, totalDelay - inheritedDelay);
+      }
+
+      if (newDelayFormed > 0 && batchModal.selectedLineIds.length > 1) {
+        setErrorMessage("When recording a delay, you must update the product lines individually.");
+        return;
+      }
+      if (newDelayFormed > 0 && !batchModal.delayReason.trim()) {
+        setErrorMessage("A delay reason is required.");
+        return;
+      }
+
+      const delayReasonToUse = newDelayFormed > 0 ? batchModal.delayReason.trim() : undefined;
+      const delayCategoryToUse = newDelayFormed > 0 ? (batchModal.delayCategory || undefined) : undefined;
 
       // Validate event date
       const val = validateEventDate({
@@ -703,7 +727,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
           ) : (
             filteredPOGroups.map(group => {
               const po = group.po;
-              const defaultOpen = filterTab !== 'completed' && !group.isAllCompleted && !po.isClosed;
+              const defaultOpen = false;
               const isExpanded = isPOExpanded(po.id, defaultOpen);
               const showCompletedLines = Boolean(showCompletedLinesInCard[po.id]);
               const hasDelayedProducts = group.delayedLines > 0;

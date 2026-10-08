@@ -221,6 +221,11 @@ export const OrderProgressOverview: React.FC<OrderProgressOverviewProps> = ({
                 <ShieldAlert className="w-3.5 h-3.5" />
                 DELAY DETECTED
               </span>
+              {rootDelayStep.productLineName && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-500/30 text-purple-200 border border-purple-400/30">
+                  {rootDelayStep.lineNumber ? `${rootDelayStep.lineNumber}: ` : ''}{rootDelayStep.productLineName}
+                </span>
+              )}
               <span className="font-mono font-bold text-white text-xs">
                 Stage {rootDelayStep.stageOrder}: {rootDelayStep.stageName.replace(/^\d+\.\s*/, '')}
               </span>
@@ -301,6 +306,23 @@ export const OrderProgressOverview: React.FC<OrderProgressOverviewProps> = ({
                     <span>Qty: <strong className="text-slate-200">{qty} Pcs</strong></span>
                   </div>
                 </div>
+
+                {/* Product Line Timeline (Baseline vs Revised) */}
+                {(() => {
+                  const finalMs = (line.milestones || []).slice(-1)[0];
+                  const targetDelivery = finalMs?.committedBaselineEndDate || po.committedDeliveryDate;
+                  const revisedDelivery = finalMs?.actualEndDate || finalMs?.forecastEndDate || targetDelivery;
+                  const isDelayedLine = (line.overallVarianceDays && line.overallVarianceDays > 0) || (revisedDelivery > targetDelivery);
+
+                  return (
+                    <div className="flex items-center justify-between text-[10px] font-mono px-2 py-1 rounded bg-slate-950/60 border border-slate-800">
+                      <span className="text-slate-400">Baseline: <strong className="text-slate-300">{targetDelivery}</strong></span>
+                      <span className={isDelayedLine ? 'text-rose-400 font-bold' : 'text-emerald-400'}>
+                        {isCompleted ? 'Delivered: ' : 'Revised: '}<strong>{revisedDelivery}</strong>
+                      </span>
+                    </div>
+                  );
+                })()}
 
                 {/* Active Milestone Status Footer */}
                 <div className="pt-1 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400">

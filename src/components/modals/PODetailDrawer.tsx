@@ -356,6 +356,10 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                     const isLineDelayed = line.status === 'Delayed' || (line.overallVarianceDays && line.overallVarianceDays > 0);
                     const lineCompletedCount = (line.milestones || []).filter(m => m.status === 'Completed' || Boolean(m.actualEndDate)).length;
 
+                    const finalMs = (line.milestones || []).slice(-1)[0];
+                    const lineBaseline = finalMs?.committedBaselineEndDate || po.committedDeliveryDate;
+                    const lineRevised = finalMs?.actualEndDate || finalMs?.forecastEndDate || lineBaseline;
+
                     return (
                       <div
                         key={line.id || idx}
@@ -373,6 +377,13 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                               : 'bg-slate-200 border-slate-300 text-slate-700'
                           }`}>
                             {isLineDelayed ? `+${line.overallVarianceDays || 3}d Delay` : line.status || 'On Track'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[10px] font-mono px-2 py-0.5 rounded bg-white border border-slate-200">
+                          <span className="text-slate-500">Plan: {lineBaseline}</span>
+                          <span className={isLineDelayed ? 'text-rose-700 font-bold' : 'text-emerald-700'}>
+                            Rev: {lineRevised}
                           </span>
                         </div>
 

@@ -271,7 +271,6 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
             </div>
             <input
               type="date"
-              min={eventType === 'start' ? (previousMsEnd || startMinDate) : currentMsStart}
               value={eventDate}
               onChange={(e) => setEventDate(e.target.value)}
               className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:border-emerald-600 font-medium font-mono"
