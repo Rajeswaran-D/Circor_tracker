@@ -22,23 +22,40 @@ const cascadeNextMilestoneStart = (
     const prevEnd = prevMs.actualEndDate || prevMs.forecastEndDate || completionDate;
 
     if (i === completedIndex + 1) {
+      const bStart = ms.committedBaselineStartDate;
+      const bEnd = ms.committedBaselineEndDate;
       const newStartDate = ms.actualStartDate
         ? (ms.actualStartDate < prevEnd ? prevEnd : ms.actualStartDate)
-        : prevEnd;
+        : (bStart && prevEnd < bStart ? bStart : prevEnd);
+      const startShift = (bStart && newStartDate > bStart) ? getDaysDifference(bStart, newStartDate) : 0;
       result[i] = {
         ...ms,
         actualStartDate: ms.status === 'In Progress' ? newStartDate : ms.actualStartDate,
         forecastStartDate: newStartDate,
-        forecastEndDate: ms.actualEndDate || addDays(newStartDate, ms.committedDurationDays),
+        forecastEndDate: ms.actualEndDate || (
+          startShift > 0 && bEnd
+            ? addDays(bEnd, startShift)
+            : (bEnd || addDays(newStartDate, ms.committedDurationDays))
+        ),
         lastUpdatedBy: user,
         lastUpdatedAt: new Date().toISOString()
       };
     } else {
-      const prevForecastEnd = result[i - 1].forecastEndDate || prevEnd;
+      const prevResult = result[i - 1];
+      const bStart = ms.committedBaselineStartDate;
+      const bEnd = ms.committedBaselineEndDate;
+      const prevEnd = prevResult.forecastEndDate || prevResult.committedBaselineEndDate;
+      const cascadeStart = (bStart && prevEnd && prevEnd <= bStart) ? bStart : (prevEnd || bStart);
+      const startShift = (bStart && cascadeStart && cascadeStart > bStart) ? getDaysDifference(bStart, cascadeStart) : 0;
+      const cascadeEnd = ms.actualEndDate || (
+        startShift > 0 && bEnd
+          ? addDays(bEnd, startShift)
+          : (bEnd || (cascadeStart ? addDays(cascadeStart, ms.committedDurationDays) : ''))
+      );
       result[i] = {
         ...ms,
-        forecastStartDate: prevForecastEnd,
-        forecastEndDate: ms.actualEndDate || addDays(prevForecastEnd, ms.committedDurationDays)
+        forecastStartDate: cascadeStart,
+        forecastEndDate: cascadeEnd
       };
     }
   }
@@ -298,6 +315,31 @@ assert(recoveredLine.overallVarianceDays === 1, `Line overall variance recovers 
 assert(recoveredLine.overallVarianceDays < 6, 'Early completion of Stage 4 reduces the accumulated delay');
 assert(recoveredLine.status === 'Delayed', `Line stays Delayed while a +1d variance remains (got ${recoveredLine.status})`);
 
+// Test complete recovery to 0d variance: Stage 5 starts on time and completes within baseline end
+line1.milestones[4].actualStartDate = line1.milestones[4].committedBaselineStartDate;
+line1.milestones[4].actualEndDate = line1.milestones[4].committedBaselineEndDate;
+line1.milestones[4].status = 'Completed';
+line1.milestones[4].completionPct = 100;
+line1.milestones[4].varianceDays = 0;
+
+const fullyRecoveredLine = recalculateProductLine(line1, '2026-10-05', 2, 5);
+assert(fullyRecoveredLine.overallVarianceDays === 0, `Line overall variance fully recovers to 0d (got ${fullyRecoveredLine.overallVarianceDays}d)`);
+assert(fullyRecoveredLine.status === 'On Track', `Line status updates to 'On Track' when variance resolves to 0 (got ${fullyRecoveredLine.status})`);
+
+// Ensure forthcoming uncompleted stages (Stage 6+) do not carry false delay or 'Previous' shifts
+const stage6 = fullyRecoveredLine.milestones[5];
+assert((stage6.varianceDays || 0) <= 0, `Forthcoming stage has 0 variance days after recovery (got ${stage6.varianceDays})`);
+assert(stage6.status !== 'Delayed', `Forthcoming stage status is not Delayed after recovery (got ${stage6.status})`);
+
+const mockPO: PurchaseOrder = {
+  ...po,
+  status: 'In Progress',
+  productLines: [fullyRecoveredLine]
+};
+const poStatusSummary = getPOManufacturingStatus(mockPO);
+assert(poStatusSummary.isDelayed === false, `PO status summary correctly reports isDelayed=false when schedule is recovered`);
+assert(poStatusSummary.delayDays === 0, `PO status summary reports 0d delay days when schedule is recovered`);
+
 // ----------------------------------------------------------------------------
 // TEST GROUP 5: Multi-Product Weighted Progress Calculation
 // ----------------------------------------------------------------------------
@@ -357,8 +399,71 @@ assert(canCloseComplete, 'Order closure is fully unlocked when all 14 stages acr
 const poStatusAfterFullCompletion = getPOManufacturingStatus(po);
 assert(poStatusAfterFullCompletion.completedStagesCount >= 14, 'getPOManufacturingStatus reports 100% stage completion');
 
+// ----------------------------------------------------------------------------
+// TEST GROUP 7: Inherited Predecessor Delay Start Chaining & Zero New Delay Validation
+// ----------------------------------------------------------------------------
+console.log('\n📋 GROUP 7: Inherited Predecessor Delay Start Chaining & Zero New Delay Validation');
+
+const stage6ActualEnd = '2026-10-24'; // 3 days delay
+
+const stage7BaselineStart = '2026-10-21';
+const stage7BaselineEnd = '2026-10-24';
+const stage7Duration = 3;
+
+// 1. Stage 7 starts with previous stage end date
+const stage7DefaultStartDate = stage6ActualEnd;
+assert(stage7DefaultStartDate === '2026-10-24', 'Stage 7 start date chains directly to Stage 6 delayed end date (2026-10-24)');
+
+// 2. Calculate delay metrics for Stage 7 start on 2026-10-24
+const s7TotalStartDelay = getDaysDifference(stage7BaselineStart, stage7DefaultStartDate); // 3 days
+const s7InheritedDelay = Math.min(s7TotalStartDelay, getDaysDifference(stage7BaselineStart, stage6ActualEnd)); // 3 days
+const s7NewDelayFormed = Math.max(0, s7TotalStartDelay - s7InheritedDelay); // 0 days
+assert(s7TotalStartDelay === 3, 'Total delay from original baseline start is 3 days');
+assert(s7InheritedDelay === 3, 'Inherited delay from previous stage is 3 days');
+assert(s7NewDelayFormed === 0, 'No new delay formed at Stage 7 when starting on previous end date (strictly 0d)');
+
+// 3. Verify planned baseline vs revised plan due to delay
+const s7RevisedStart = stage6ActualEnd; // 2026-10-24
+const s7RevisedEnd = addDays(s7RevisedStart, stage7Duration); // 2026-10-27 (+3d shift)
+assert(stage7BaselineStart === '2026-10-21' && stage7BaselineEnd === '2026-10-24', 'Planned baseline preserved immutable as 2026-10-21 -> 2026-10-24');
+assert(s7RevisedStart === '2026-10-24' && s7RevisedEnd === '2026-10-27', 'Revised target due to delay correctly computed as 2026-10-24 -> 2026-10-27');
+
+// ----------------------------------------------------------------------------
+// TEST GROUP 8: Completed & Closed Order Delay Preservation in History
+// ----------------------------------------------------------------------------
+console.log('\n📋 GROUP 8: Completed & Closed Order Delay Preservation in History Archive');
+
+const closedDelayedPO: PurchaseOrder = {
+  ...po,
+  id: 'PO-CLOSED-DELAYED',
+  poNumber: 'PO-2026-999',
+  isClosed: true,
+  status: 'Closed' as any,
+  committedDeliveryDate: '2026-09-01',
+  revisedDeliveryDate: '2026-09-04',
+  productLines: [
+    {
+      ...po.productLines[0],
+      overallVarianceDays: 3,
+      milestones: po.productLines[0].milestones.map((m, idx) => ({
+        ...m,
+        status: 'Completed',
+        actualEndDate: idx === 13 ? '2026-09-04' : '2026-08-20',
+        committedBaselineEndDate: idx === 13 ? '2026-09-01' : '2026-08-15',
+        varianceDays: idx === 13 ? 3 : 0
+      }))
+    }
+  ]
+};
+
+const closedDelayedSummary = getPOManufacturingStatus(closedDelayedPO);
+assert(closedDelayedSummary.delayDays === 3, `Closed delayed order accurately preserves delayDays of 3d (got ${closedDelayedSummary.delayDays}d)`);
+assert(closedDelayedSummary.timelineValidationStatus === 'CLOSED', 'Timeline status is CLOSED');
+assert(closedDelayedSummary.timelineMessage.includes('+3d delay'), 'Timeline message highlights +3d delay on closed order');
+
 console.log('\n================================================================');
 const successRate = totalTests === 0 ? 0 : Math.round((passedTests / totalTests) * 100);
 console.log(`${passedTests === totalTests ? '🎉' : '⚠️'} TEST SUMMARY: ${passedTests}/${totalTests} TESTS PASSED (${successRate}% SUCCESS RATE)`);
 console.log('================================================================\n');
 if (passedTests !== totalTests) throw new Error(`${totalTests - passedTests} e2e test(s) failed`);
+

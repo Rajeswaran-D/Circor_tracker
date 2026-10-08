@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Calendar, CheckCircle2, Lock, ShieldCheck } from 'lucide-react';
+import { Calendar, CheckCircle2, Lock, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { BaselineRevisionModal } from '../modals/BaselineRevisionModal';
 import type { PurchaseOrder } from '../../types';
+import { getPOManufacturingStatus } from '../../utils/statusUtils';
 
 export const BaselinePlanningModule: React.FC = () => {
   const { purchaseOrders, activeRole } = useApp();
@@ -42,6 +43,8 @@ export const BaselinePlanningModule: React.FC = () => {
               const firstMilestone = firstLine?.milestones[0];
               const lastMilestone = firstLine?.milestones[firstLine.milestones.length - 1];
               const isPending = po.status === 'Baseline Pending' && !po.isClosed;
+              const statusSummary = getPOManufacturingStatus(po);
+              const isDelayed = statusSummary.isDelayed;
 
               return (
                 <div key={po.id} className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -50,16 +53,29 @@ export const BaselinePlanningModule: React.FC = () => {
                       <span className="font-mono font-bold text-emerald-800">{po.poNumber}</span>
                       <span className="font-semibold text-slate-900">{po.customerName}</span>
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                        isPending ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                        isPending 
+                          ? 'bg-amber-100 text-amber-900 border-amber-300' 
+                          : isDelayed
+                          ? 'bg-rose-100 text-rose-800 border-rose-300'
+                          : 'bg-emerald-100 text-emerald-900 border-emerald-300'
                       }`}>
-                        {po.status}
+                        {isPending ? 'Baseline Pending' : isDelayed ? `Delayed (+${statusSummary.delayDays}d)` : po.status}
                       </span>
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-slate-600">
                       <span className="font-bold text-slate-700">Planned Start: <strong className="font-mono text-slate-900">{firstMilestone?.committedBaselineStartDate || po.poDate}</strong></span>
                       <span className="font-bold text-slate-700">Planned End: <strong className="font-mono text-slate-900">{lastMilestone?.committedBaselineEndDate || po.committedDeliveryDate}</strong></span>
-                      <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> Delivery: <strong className="font-mono">{po.revisedDeliveryDate || po.committedDeliveryDate}</strong></span>
+                      <span className="flex items-center gap-1">
+                        <Calendar className="w-3.5 h-3.5" /> 
+                        Delivery: <strong className={`font-mono ${isDelayed ? 'text-rose-700 font-bold' : ''}`}>{po.revisedDeliveryDate || po.committedDeliveryDate}</strong>
+                      </span>
                     </div>
+                    {isDelayed && statusSummary.delayedStageName && (
+                      <div className="mt-1.5 text-[11px] font-medium text-rose-700 flex items-center gap-1">
+                        <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                        <span>Schedule delay formed at <strong>{statusSummary.delayedStageName}</strong> (+{statusSummary.delayDays}d late vs baseline target).</span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-3">
@@ -72,9 +88,19 @@ export const BaselinePlanningModule: React.FC = () => {
                         <span className="px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold">PM Review Required</span>
                       )
                     ) : (
-                      <span className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-1.5">
-                        <CheckCircle2 className="w-3.5 h-3.5" /> Baseline Locked
-                      </span>
+                      <div className="flex items-center gap-2">
+                        {isPM && isDelayed && (
+                          <button
+                            onClick={() => setReviewPO(po)}
+                            className="px-3 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                          >
+                            <ShieldCheck className="w-3.5 h-3.5" /> Review Schedule
+                          </button>
+                        )}
+                        <span className="px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Baseline Locked
+                        </span>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -99,6 +125,7 @@ export const BaselinePlanningModule: React.FC = () => {
             {completedOrders.map(po => {
               const firstLine = po.productLines[0];
               const lastMilestone = firstLine?.milestones[firstLine.milestones.length - 1];
+              const statusSummary = getPOManufacturingStatus(po);
 
               return (
                 <div key={po.id} className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white/70">
@@ -106,8 +133,20 @@ export const BaselinePlanningModule: React.FC = () => {
                     <div className="flex items-center gap-3">
                       <span className="font-mono font-bold text-slate-700">{po.poNumber}</span>
                       <span className="font-semibold text-slate-800">{po.customerName}</span>
-                      <span className="px-2.5 py-0.5 rounded-full bg-slate-200 border border-slate-300 text-slate-700 text-[10px] font-bold flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-600" /> {po.isClosed ? 'Closed' : 'Completed'}
+                      <span className={`px-2.5 py-0.5 rounded-full border text-[10px] font-bold flex items-center gap-1 ${
+                        statusSummary.delayDays > 0 ? 'bg-amber-100 border-amber-300 text-amber-900' : 'bg-slate-200 border-slate-300 text-slate-700'
+                      }`}>
+                        {statusSummary.delayDays > 0 ? (
+                          <>
+                            <AlertTriangle className="w-3 h-3 text-amber-700" />
+                            Completed by delay of {statusSummary.delayDays} days
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            {po.isClosed ? 'Closed (On Time)' : 'Completed (On Time)'}
+                          </>
+                        )}
                       </span>
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-slate-500">

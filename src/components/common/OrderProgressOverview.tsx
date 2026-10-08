@@ -39,7 +39,7 @@ export const OrderProgressOverview: React.FC<OrderProgressOverviewProps> = ({
     // Give partial credit for currently in-progress milestones (50% of 1 milestone weight)
     const rawScore = completedMilestones + (inProgressMs ? 0.5 : 0);
     const progressPct = Math.min(100, Math.round((rawScore / totalMilestones) * 100));
-    const isCompleted = completedMilestones >= totalMilestones || line.status === 'Completed';
+    const isCompleted = totalMilestones > 0 && completedMilestones === totalMilestones;
 
     return {
       line,
@@ -57,7 +57,7 @@ export const OrderProgressOverview: React.FC<OrderProgressOverviewProps> = ({
   const weightedSum = lineDetails.reduce((acc, d) => acc + (d.progressPct * d.qty), 0);
   const calculatedPOProgress = totalWeight > 0 ? Math.round(weightedSum / totalWeight) : 0;
   
-  const isAllComplete = po.isClosed || po.status === 'Completed' || lineDetails.every(d => d.isCompleted);
+  const isAllComplete = po.isClosed || (lineDetails.length > 0 && lineDetails.every(d => d.isCompleted));
   const overallProgressPct = isAllComplete ? 100 : calculatedPOProgress;
 
   const totalStagesCompleted = lineDetails.reduce((acc, d) => acc + d.completedMilestones, 0);
@@ -65,9 +65,9 @@ export const OrderProgressOverview: React.FC<OrderProgressOverviewProps> = ({
   const completedLinesCount = lineDetails.filter(d => d.isCompleted).length;
 
   const maxVariance = lineDetails.reduce((max, d) => Math.max(max, d.line.overallVarianceDays || 0), 0);
-  const isDelayed = po.status === 'Delayed' || maxVariance > 0;
+  const isDelayed = (po.status === 'Delayed' || maxVariance > 0) && !isAllComplete;
 
-  const { hasDelays, rootDelayStep } = extractDelayFlow(po);
+  const { rootDelayStep } = extractDelayFlow(po);
 
   return (
     <div className={`bg-gradient-to-br from-slate-900 via-slate-850 to-slate-900 border border-slate-700/80 rounded-2xl shadow-xl overflow-hidden text-white transition-all ${className}`}>
@@ -213,8 +213,8 @@ export const OrderProgressOverview: React.FC<OrderProgressOverviewProps> = ({
           </div>
         </div>
 
-        {/* Compact Delay Notice in Progress Card */}
-        {hasDelays && rootDelayStep && (
+        {/* Compact Delay Notice in Progress Card - Only when the order actually has an active delay */}
+        {isDelayed && rootDelayStep && (
           <div className="bg-rose-950/60 border border-rose-500/40 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs animate-in fade-in duration-200">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-black uppercase tracking-wider bg-rose-600 text-white flex items-center gap-1 shadow-2xs">
@@ -222,10 +222,10 @@ export const OrderProgressOverview: React.FC<OrderProgressOverviewProps> = ({
                 DELAY DETECTED
               </span>
               <span className="font-mono font-bold text-white text-xs">
-                Stage {rootDelayStep.stageOrder}: {rootDelayStep.stageName}
+                Stage {rootDelayStep.stageOrder}: {rootDelayStep.stageName.replace(/^\d+\.\s*/, '')}
               </span>
               <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-500/30 text-rose-200 border border-rose-400/30">
-                +{rootDelayStep.stageDelayAdded || rootDelayStep.varianceDays}d Added
+                +{maxVariance > 0 ? maxVariance : (rootDelayStep.varianceDays || 1)}d Delay
               </span>
             </div>
             {rootDelayStep.delayReason && (
@@ -310,7 +310,7 @@ export const OrderProgressOverview: React.FC<OrderProgressOverviewProps> = ({
                         <Check className="w-3 h-3" /> Fully Delivered
                       </span>
                     ) : (
-                      <span>Current: <strong className="text-slate-200">{activeMs ? `${activeMs.stageOrder}. ${activeMs.name}` : 'In Progress'}</strong></span>
+                      <span>Current: <strong className="text-slate-200">{activeMs ? `${activeMs.stageOrder}. ${activeMs.name.replace(/^\d+\.\s*/, '')}` : 'In Progress'}</strong></span>
                     )}
                   </span>
                   <span className={line.overallVarianceDays > 0 ? 'text-rose-400 font-mono font-bold' : 'text-emerald-400 font-mono'}>

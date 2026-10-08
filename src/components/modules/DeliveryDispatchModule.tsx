@@ -140,9 +140,15 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
                       <Calendar className="w-3 h-3 text-slate-500" /> {po.poDate} &rarr; <strong className="text-emerald-800">{po.revisedDeliveryDate || po.committedDeliveryDate}</strong>
                     </span>
                     {isClosed ? (
-                      <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-600 border border-slate-300">
-                        <CheckCircle2 className="w-3 h-3" /> Closed
-                      </span>
+                      statusSummary.delayDays > 0 ? (
+                        <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                          <AlertTriangle className="w-3 h-3 text-amber-700" /> Completed by delay of {statusSummary.delayDays} days
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-600 border border-slate-300">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Completed On Time
+                        </span>
+                      )
                     ) : statusSummary.isDelayed ? (
                       <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
                         <AlertTriangle className="w-3 h-3" /> Delayed (+{statusSummary.delayDays}d)
@@ -183,6 +189,11 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
                               dispatchDeliveryMs.map(ms => {
                                 const isCompleted = ms.status === "Completed" || Boolean(ms.actualEndDate);
                                 const isInProgress = (ms.status === "In Progress" || Boolean(ms.actualStartDate)) && !isCompleted;
+                                const msIdx = line.milestones.findIndex(m => m.id === ms.id || m.key === ms.key);
+                                const prevMs = msIdx > 0 ? line.milestones[msIdx - 1] : null;
+                                const currVar = Math.max(0, typeof ms.varianceDays === 'number' ? ms.varianceDays : 0);
+                                const prevVar = prevMs ? Math.max(0, typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0) : 0;
+                                const recoveredDays = isCompleted ? Math.max(0, prevVar - currVar) : 0;
                                 return (
                                   <div key={ms.id} className={`p-4 border rounded-xl flex items-center justify-between text-xs ${
                                     isCompleted ? "bg-emerald-50/40 border-emerald-200" :
@@ -207,7 +218,7 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
                                         isInProgress ? "bg-blue-100 text-blue-800 border-blue-300" :
                                         ms.status === "Delayed" ? "bg-rose-100 text-rose-800 border-rose-300" :
                                         "bg-slate-100 text-slate-700 border-slate-300"
-                                      }`}>{isCompleted ? "Completed" : isInProgress ? (ms.status === "Delayed" || (ms.varianceDays && ms.varianceDays > 0) ? `In Execution (+${ms.varianceDays}d)` : "In Execution") : ms.status}</span>
+                                      }`}>{isCompleted ? (recoveredDays > 0 ? `Completed (${recoveredDays === 1 ? '1 day' : `${recoveredDays} days`} delay resolved)` : "Completed") : isInProgress ? (ms.status === "Delayed" || (ms.varianceDays && ms.varianceDays > 0) ? `In Execution (+${ms.varianceDays}d)` : "In Execution") : ms.status}</span>
                                       
                                       {!isClosed && po.status !== 'Completed' && isMilestoneOwnedByRole(ms.key, activeRole) && (
                                         <div className="flex items-center gap-1.5 ml-2">

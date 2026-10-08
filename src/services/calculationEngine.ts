@@ -491,12 +491,12 @@ export function recalculateProductLine(
 
   for (let msIndex = 0; msIndex < milestones.length; msIndex++) {
     const ms = milestones[msIndex];
-    let forecastStart = currentForecastStart;
+    let forecastStart = ms.committedBaselineStartDate || currentForecastStart;
 
     if (msIndex > 0) {
       const prevMs = updatedMilestones[msIndex - 1];
       const prevEnd = milestoneEffectiveEnd(prevMs);
-      if (prevEnd && forecastStart < prevEnd) {
+      if (prevEnd && prevEnd > forecastStart) {
         forecastStart = prevEnd;
       }
     }
@@ -515,14 +515,25 @@ export function recalculateProductLine(
     // A milestone always occupies at least one day, so its start can never equal
     // (or overtake) its own end.
     const duration = Math.max(1, ms.committedDurationDays || 1);
-    const forecastEnd = ms.actualEndDate || addDays(forecastStart, duration);
+    const startDelay = (ms.committedBaselineStartDate && forecastStart > ms.committedBaselineStartDate)
+      ? getDaysDifference(ms.committedBaselineStartDate, forecastStart)
+      : 0;
+    const forecastEnd = ms.actualEndDate || (
+      startDelay > 0 && ms.committedBaselineEndDate
+        ? addDays(ms.committedBaselineEndDate, startDelay)
+        : (ms.committedBaselineEndDate || addDays(forecastStart, duration))
+    );
 
     const effEnd = ms.actualEndDate || forecastEnd;
-    const varianceDays = getDaysDifference(ms.committedBaselineEndDate, effEnd);
+    const varianceDays = effEnd > ms.committedBaselineEndDate 
+      ? Math.max(1, getDaysDifference(ms.committedBaselineEndDate, effEnd))
+      : getDaysDifference(ms.committedBaselineEndDate, effEnd);
 
     let status: MilestoneStatus = ms.status;
     let delayCategory = ms.delayCategory;
-    let delayReason = ms.delayReason;
+    let delayReason = ms.delayReason && !ms.delayReason.startsWith('Inherited delay') && !ms.delayReason.startsWith('Cascaded delay')
+      ? ms.delayReason
+      : undefined;
     let delayOwner = ms.delayOwner;
 
     const delayedSub = ms.subdivisions?.find(s => s.status === 'Delayed');
@@ -578,7 +589,7 @@ export function recalculateProductLine(
   const overallVarianceDays = Math.max(0, finalVariance);
 
   let lineStatus: MilestoneStatus = 'Not Started';
-  const allCompleted = updatedMilestones.every(m => m.status === 'Completed');
+  const allCompleted = updatedMilestones.length > 0 && updatedMilestones.every(m => m.status === 'Completed');
   const hasActiveDelayed = updatedMilestones.some(m => !m.actualEndDate && m.status === 'Delayed');
   const hasActiveAtRisk = updatedMilestones.some(m => !m.actualEndDate && m.status === 'At Risk');
 
@@ -715,7 +726,7 @@ export function mergeDelayReason(existingReason: string = '', inheritedSummary: 
   const cleanExisting = (existingReason || '')
     .split(/\s*\|\s*/)
     .map(s => s.trim())
-    .filter(s => s.length > 0 && !s.startsWith('Inherited delay from preceding') && !s.startsWith('Delay cascaded from'));
+    .filter(s => s.length > 0 && !s.startsWith('Inherited delay') && !s.startsWith('Delay cascaded from'));
 
   if (cleanExisting.length > 0) {
     return `${cleanExisting.join(' | ')} | ${inheritedSummary}`;

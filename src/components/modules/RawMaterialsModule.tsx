@@ -222,14 +222,27 @@ export const RawMaterialsModule: React.FC = () => {
                           {line.lineNumber}: {line.productName}
                         </div>
                         <div className="px-4 py-3 grid grid-cols-2 gap-3 border-b border-slate-100 text-[11px]">
-                          {line.milestones.filter(m => m.key === "raw_material" || m.key === "incoming_inspection").map(ms => (
-                            <div key={ms.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                              <span className="text-slate-600">{ms.name}</span>
-                              <span className={`font-semibold ${ms.status === "Completed" ? "text-emerald-700" : ms.status === "Delayed" ? "text-rose-700" : "text-slate-700"}`}>
-                                {ms.status}
-                              </span>
-                            </div>
-                          ))}
+                          {line.milestones.filter(m => m.key === "raw_material" || m.key === "incoming_inspection").map(ms => {
+                            const mIdx = line.milestones.findIndex(m => m.id === ms.id || m.key === ms.key);
+                            const prevMs = mIdx > 0 ? line.milestones[mIdx - 1] : null;
+                            const currVar = Math.max(0, typeof ms.varianceDays === 'number' ? ms.varianceDays : 0);
+                            const prevVar = prevMs ? Math.max(0, typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0) : 0;
+                            const stageDelta = Math.max(0, currVar - prevVar);
+
+                            return (
+                              <div key={ms.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+                                <span className="text-slate-600">{ms.name}</span>
+                                <span className={`font-semibold ${
+                                  ms.status === "Completed" ? "text-emerald-700" :
+                                  stageDelta > 0 ? "text-rose-700" :
+                                  currVar > 0 ? "text-slate-700" :
+                                  "text-slate-700"
+                                }`}>
+                                  {ms.status === "Completed" ? "Completed" : stageDelta > 0 ? `Delay (+${stageDelta}d)` : currVar > 0 ? `Previous (+${currVar}d)` : ms.status}
+                                </span>
+                              </div>
+                            );
+                          })}
                         </div>
                         {line.materials.length === 0 ? (
                           <div className="py-6 text-center text-slate-400 text-xs">No materials defined for this line.</div>

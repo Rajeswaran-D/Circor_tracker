@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { PurchaseOrder, DelayCategory, ProductLine } from '../../types';
-import { AlertCircle, CheckCircle2, Clock, ShieldAlert, Sparkles, Zap } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Clock, ShieldAlert, Sparkles, Zap } from 'lucide-react';
 import { getDaysDifference } from '../../services/calculationEngine';
 
 interface DelayAnalysisFlowProps {
@@ -8,6 +8,7 @@ interface DelayAnalysisFlowProps {
   lineId?: string;
   className?: string;
   showAllStages?: boolean;
+  defaultOpen?: boolean;
 }
 
 export interface DelayStep {
@@ -16,7 +17,7 @@ export interface DelayStep {
   stageKey: string;
   varianceDays: number;
   delayDays: number;
-  stageDelayAdded: number; // Exact days added by this specific stage
+  stageDelayAdded: number; // Exact days added (+) or recovered (-) by this specific stage
   cumulativeDelay: number;  // Running cumulative delay after this stage
   stageDelta: number;
   isRootCause: boolean;
@@ -29,7 +30,7 @@ export interface DelayStep {
 }
 
 /**
- * Extracts and calculates delay flow for a single product line.
+ * Extracts and calculates simple milestone-wise delay & recovery flow for a single product line.
  */
 function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
   hasDelays: boolean;
@@ -43,7 +44,7 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
   aheadDays: number;
 } {
   const milestones = line.milestones || [];
-  const delayedSteps: DelayStep[] = [];
+  const delaySteps: DelayStep[] = [];
   const recoverySteps: DelayStep[] = [];
   let rootDelayStep: DelayStep | null = null;
   let totalDaysDelayed = 0;
@@ -61,126 +62,128 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
     const actualEnd = ms.actualEndDate || ms.forecastEndDate;
     const actualDuration = (actualStart && actualEnd) ? Math.max(1, getDaysDifference(actualStart, actualEnd)) : undefined;
 
-    const currentVariance = typeof ms.varianceDays === 'number' ? ms.varianceDays : 0;
-    const prevVariance = prevMs && typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0;
+    // Direct variance at this milestone against its baseline target
+    const currentVariance = typeof ms.varianceDays === 'number' ? ms.varianceDays : (
+      actualEnd ? getDaysDifference(plannedEnd, actualEnd) : 0
+    );
 
-    let stageDelayAdded = 0;
-    let stageTimeRecovered = 0;
+    // Active delay (non-negative)
+    const activeVariance = Math.max(0, currentVariance);
+    const prevActiveVariance = prevMs ? Math.max(0, typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0) : 0;
 
-    if (prevVariance <= 0) {
-      if (currentVariance > 0) {
-        stageDelayAdded = currentVariance;
-      }
-    } else {
-      if (currentVariance > prevVariance) {
-        stageDelayAdded = currentVariance - prevVariance;
-      } else if (currentVariance < prevVariance) {
-        stageTimeRecovered = prevVariance - currentVariance;
-      }
-    }
+    const delta = activeVariance - prevActiveVariance;
 
-    if (stageDelayAdded > 0) {
-      totalDaysDelayed += stageDelayAdded;
-
-      const isRoot = !rootDelayStep;
+    // 1. Stage added new delay days and is actively delayed
+    if (delta > 0 && activeVariance > 0) {
+      totalDaysDelayed += delta;
       const step: DelayStep = {
         stageOrder: ms.stageOrder,
         stageName: ms.name,
         stageKey: ms.key,
-        varianceDays: currentVariance,
-        delayDays: stageDelayAdded,
-        stageDelayAdded,
-        cumulativeDelay: currentVariance,
-        stageDelta: stageDelayAdded,
-        isRootCause: isRoot,
+        varianceDays: activeVariance,
+        delayDays: delta,
+        stageDelayAdded: delta,
+        cumulativeDelay: activeVariance,
+        stageDelta: delta,
+        isRootCause: false,
         isRecovery: false,
-        isAdditionalDelay: !isRoot,
+        isAdditionalDelay: true,
         delayCategory: ms.delayCategory,
         delayReason: ms.delayReason,
         plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
         actualDates: { start: actualStart, end: actualEnd, duration: actualDuration }
       };
 
-      if (isRoot) {
-        rootDelayStep = step;
-      }
-
-      delayedSteps.push(step);
-    } else if (stageTimeRecovered > 0 && delayedSteps.length > 0) {
-      totalDaysRecovered += stageTimeRecovered;
+      delaySteps.push(step);
+    } 
+    // 2. Stage recovered existing delay (previous delay was reduced)
+    else if (delta < 0 && prevActiveVariance > 0) {
+      const recoveredDays = Math.min(prevActiveVariance, Math.abs(delta));
+      totalDaysRecovered += recoveredDays;
 
       const step: DelayStep = {
         stageOrder: ms.stageOrder,
         stageName: ms.name,
         stageKey: ms.key,
-        varianceDays: currentVariance,
-        delayDays: -stageTimeRecovered,
-        stageDelayAdded: -stageTimeRecovered,
-        cumulativeDelay: Math.max(0, currentVariance),
-        stageDelta: -stageTimeRecovered,
+        varianceDays: activeVariance,
+        delayDays: delta,
+        stageDelayAdded: -recoveredDays,
+        cumulativeDelay: activeVariance,
+        stageDelta: delta,
         isRootCause: false,
         isRecovery: true,
         isAdditionalDelay: false,
         delayCategory: ms.delayCategory,
-        delayReason: ms.delayReason,
+        delayReason: ms.delayReason || `${recoveredDays}d recovered on this stage`,
         plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
         actualDates: { start: actualStart, end: actualEnd, duration: actualDuration }
       };
 
-      delayedSteps.push(step);
+      delaySteps.push(step);
       recoverySteps.push(step);
-    } else if (Boolean(ms.delayReason) && !ms.delayReason?.startsWith('Cascaded') && !ms.delayReason?.startsWith('Inherited')) {
-      const historicalVariance = (ms.actualEndDate && ms.committedBaselineEndDate)
-        ? Math.max(0, getDaysDifference(ms.committedBaselineEndDate, ms.actualEndDate))
-        : (currentVariance > 0 ? currentVariance : 1);
-
-      const isRoot = !rootDelayStep;
+    } 
+    // 3. Stage has an explicit user-entered delay reason and has active variance
+    else if (Boolean(ms.delayReason) && !ms.delayReason?.startsWith('Cascaded') && !ms.delayReason?.startsWith('Inherited') && activeVariance > 0 && !delaySteps.some(s => s.stageKey === ms.key)) {
       const step: DelayStep = {
         stageOrder: ms.stageOrder,
         stageName: ms.name,
         stageKey: ms.key,
-        varianceDays: currentVariance,
-        delayDays: historicalVariance,
-        stageDelayAdded: historicalVariance,
-        cumulativeDelay: Math.max(0, currentVariance),
-        stageDelta: historicalVariance,
-        isRootCause: isRoot,
+        varianceDays: activeVariance,
+        delayDays: activeVariance,
+        stageDelayAdded: activeVariance,
+        cumulativeDelay: activeVariance,
+        stageDelta: activeVariance,
+        isRootCause: false,
         isRecovery: false,
-        isAdditionalDelay: !isRoot,
+        isAdditionalDelay: true,
         delayCategory: ms.delayCategory,
         delayReason: ms.delayReason,
         plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
         actualDates: { start: actualStart, end: actualEnd, duration: actualDuration }
       };
 
-      if (isRoot) {
-        rootDelayStep = step;
-      }
-
-      delayedSteps.push(step);
+      delaySteps.push(step);
     }
   }
 
-  const lastMilestoneVariance = milestones[milestones.length - 1]?.varianceDays || 0;
+  // Prioritize the true delay origin:
+  // 1. Stage where the user directly recorded an explicit delay reason
+  // 2. Stage with the largest newly added delay (stageDelayAdded > 0)
+  // 3. Earliest non-recovery delay step
+  const nonRecoverySteps = delaySteps.filter(s => !s.isRecovery);
+  const stepWithExplicitReason = nonRecoverySteps.find(s => s.delayReason && !s.delayReason.startsWith('Cascaded') && !s.delayReason.startsWith('Inherited'));
+  const stepWithMaxAddedDelay = [...nonRecoverySteps].sort((a, b) => (b.stageDelayAdded || 0) - (a.stageDelayAdded || 0))[0];
+  
+  rootDelayStep = stepWithExplicitReason || stepWithMaxAddedDelay || nonRecoverySteps[0] || null;
+
+  if (rootDelayStep) {
+    delaySteps.forEach(s => {
+      s.isRootCause = s.stageKey === rootDelayStep?.stageKey;
+      s.isAdditionalDelay = !s.isRootCause && !s.isRecovery;
+    });
+  }
+
+  const lastMilestoneVariance = milestones[milestones.length - 1]?.varianceDays || line.overallVarianceDays || 0;
   const netVarianceDays = Math.max(0, lastMilestoneVariance);
-  const aheadDays = lastMilestoneVariance < 0 && delayedSteps.length === 0 ? Math.abs(lastMilestoneVariance) : 0;
-  const hasDelays = delayedSteps.length > 0 || netVarianceDays > 0;
+  const aheadDays = lastMilestoneVariance < 0 ? Math.abs(lastMilestoneVariance) : 0;
+  const isLineDelayed = line.status === 'Delayed' || netVarianceDays > 0 || (line.overallVarianceDays || 0) > 0;
+  const hasDelays = isLineDelayed && delaySteps.length > 0;
 
   return {
     hasDelays,
     rootDelayStep,
-    delaySteps: delayedSteps,
-    allDelayOriginSteps: delayedSteps.filter(s => !s.isRecovery),
+    delaySteps,
+    allDelayOriginSteps: delaySteps.filter(s => !s.isRecovery),
     recoverySteps,
     netVarianceDays,
-    totalDaysDelayed,
-    totalDaysRecovered,
+    totalDaysDelayed: hasDelays ? totalDaysDelayed : 0,
+    totalDaysRecovered: hasDelays ? totalDaysRecovered : 0,
     aheadDays
   };
 }
 
 /**
- * Extracts and calculates a clear-cut milestone-by-milestone delay breakdown across the PO or a target product line.
+ * Extracts and calculates milestone-by-milestone delay breakdown across the PO or a target product line.
  */
 export function extractDelayFlow(po: PurchaseOrder, targetLineId?: string): {
   hasDelays: boolean;
@@ -218,7 +221,7 @@ export function extractDelayFlow(po: PurchaseOrder, targetLineId?: string): {
     return {
       ...res,
       allStepsWithVariance: res.delaySteps,
-      isRecovered: res.totalDaysDelayed > 0 && res.netVarianceDays === 0
+      isRecovered: false
     };
   }
 
@@ -238,15 +241,26 @@ export function extractDelayFlow(po: PurchaseOrder, targetLineId?: string): {
   delayedLineResults.forEach(res => {
     res.delaySteps.forEach(step => {
       const existing = stepMap.get(step.stageKey);
-      if (!existing || step.stageDelayAdded > existing.stageDelayAdded) {
+      if (!existing || Math.abs(step.stageDelayAdded) > Math.abs(existing.stageDelayAdded)) {
         stepMap.set(step.stageKey, step);
       }
     });
   });
 
   const combinedDelaySteps = Array.from(stepMap.values()).sort((a, b) => a.stageOrder - b.stageOrder);
-  const rootDelayStep = combinedDelaySteps.find(s => s.isRootCause) || combinedDelaySteps[0] || null;
-  const hasDelays = combinedDelaySteps.length > 0 || maxNetVariance > 0;
+  const combinedNonRecovery = combinedDelaySteps.filter(s => !s.isRecovery);
+  const stepWithExplicitReason = combinedNonRecovery.find(s => s.delayReason && !s.delayReason.startsWith('Cascaded') && !s.delayReason.startsWith('Inherited'));
+  const stepWithMaxAddedDelay = [...combinedNonRecovery].sort((a, b) => (b.stageDelayAdded || 0) - (a.stageDelayAdded || 0))[0];
+  const rootDelayStep = stepWithExplicitReason || stepWithMaxAddedDelay || combinedDelaySteps.find(s => s.isRootCause) || combinedNonRecovery[0] || null;
+
+  if (rootDelayStep) {
+    combinedDelaySteps.forEach(s => {
+      s.isRootCause = s.stageKey === rootDelayStep.stageKey;
+      s.isAdditionalDelay = !s.isRootCause && !s.isRecovery;
+    });
+  }
+  const isPODelayed = maxNetVariance > 0 || po.status === 'Delayed' || po.productLines.some(l => l.status === 'Delayed' || (l.overallVarianceDays || 0) > 0);
+  const hasDelays = isPODelayed && combinedDelaySteps.length > 0;
   const aheadDays = !hasDelays ? Math.max(...allLineResults.map(r => r.aheadDays), 0) : 0;
 
   return {
@@ -259,7 +273,7 @@ export function extractDelayFlow(po: PurchaseOrder, targetLineId?: string): {
     netVarianceDays: maxNetVariance,
     totalDaysDelayed: maxDaysDelayed,
     totalDaysRecovered: maxDaysRecovered,
-    isRecovered: maxDaysDelayed > 0 && maxNetVariance === 0,
+    isRecovered: false,
     aheadDays
   };
 }
@@ -267,8 +281,10 @@ export function extractDelayFlow(po: PurchaseOrder, targetLineId?: string): {
 export const DelayAnalysisFlow: React.FC<DelayAnalysisFlowProps> = ({
   po,
   lineId,
-  className = ''
+  className = '',
+  defaultOpen = false
 }) => {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
   const {
     hasDelays,
     delaySteps,
@@ -308,45 +324,46 @@ export const DelayAnalysisFlow: React.FC<DelayAnalysisFlowProps> = ({
     );
   }
 
-  // Clear-cut, professional Delay Report
+  const effectiveDelayDays = netVarianceDays > 0 ? netVarianceDays : totalDaysDelayed;
+
+  // Milestone-by-milestone delay & recovery report with collapsible dropdown
   return (
-    <div className={`bg-white border border-rose-200 rounded-2xl overflow-hidden shadow-xs space-y-0 ${className}`}>
+    <div className={`bg-white border border-rose-200 rounded-2xl overflow-hidden shadow-xs transition-all ${className}`}>
       
-      {/* 1. Header Summary */}
-      <div className="p-4 bg-slate-900 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      {/* 1. Header Summary with Dropdown Toggle Arrow */}
+      <button
+        type="button"
+        onClick={() => setIsOpen(prev => !prev)}
+        className="w-full text-left p-3.5 sm:p-4 bg-slate-900 hover:bg-slate-800 transition-colors text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer select-none"
+        title={isOpen ? 'Click to collapse delay log' : 'Click to expand delay log'}
+      >
         <div className="flex items-center gap-3">
+          <div className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-slate-200 transition-colors shrink-0">
+            {isOpen ? <ChevronDown className="w-4 h-4 text-rose-300" /> : <ChevronRight className="w-4 h-4 text-slate-300" />}
+          </div>
           <div className="w-8 h-8 rounded-lg bg-rose-500/20 border border-rose-500/30 text-rose-400 flex items-center justify-center shrink-0">
             <ShieldAlert className="w-4 h-4" />
           </div>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="font-bold text-sm text-white">
-                {netVarianceDays === 0 ? 'Historical Delay & Recovery Log' : 'Milestone Delay Details'}
+              <h3 className="font-bold text-xs sm:text-sm text-white">
+                Milestone Delay &amp; Recovery Log
               </h3>
-              {netVarianceDays > 0 ? (
-                <span className="px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold bg-rose-600 text-white shadow-2xs">
-                  +{netVarianceDays} {netVarianceDays === 1 ? 'Day' : 'Days'} Total Delay
-                </span>
-              ) : (
-                <span className="px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold bg-emerald-600 text-white shadow-2xs flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  Schedule Recovered (0d Net Variance)
-                </span>
-              )}
+              <span className="px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold bg-rose-600 text-white shadow-2xs">
+                +{effectiveDelayDays} {effectiveDelayDays === 1 ? 'Day' : 'Days'} Net Delay
+              </span>
               {totalDaysRecovered > 0 && (
-                <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-emerald-500/25 text-emerald-200 border border-emerald-400/30 flex items-center gap-1">
+                <span className="px-2.5 py-0.5 rounded-md text-[10px] font-mono font-bold bg-emerald-500/25 text-emerald-200 border border-emerald-400/30 flex items-center gap-1">
                   <Zap className="w-3 h-3 text-emerald-300" />
                   -{totalDaysRecovered}d Recovered
                 </span>
               )}
             </div>
             <p className="text-[11px] text-slate-300 mt-0.5">
-              {netVarianceDays === 0
-                ? `Historical delay (+${totalDaysDelayed}d) was successfully recovered by fast-tracking subsequent stages.`
-                : delaySteps.length === 1 
+              {delaySteps.length === 1 
                 ? `1 stage recorded a delay (+${totalDaysDelayed}d total)`
                 : `${delaySteps.length} stages recorded variance (+${totalDaysDelayed}d added${totalDaysRecovered > 0 ? `, -${totalDaysRecovered}d recovered` : ''})`
-              }
+              } • <span className="text-rose-300 font-medium">{isOpen ? 'Click to collapse' : 'Click dropdown to expand'}</span>
             </p>
           </div>
         </div>
@@ -359,109 +376,102 @@ export const DelayAnalysisFlow: React.FC<DelayAnalysisFlowProps> = ({
             </div>
           </div>
         </div>
-      </div>
+      </button>
 
-      {/* 2. Clear-cut Milestone Delay Cards */}
-      <div className="p-4 space-y-3 bg-slate-50/50">
-        <div className="flex items-center justify-between text-xs text-slate-600 font-bold px-1">
-          <span className="flex items-center gap-1.5 text-slate-800">
-            <Clock className="w-4 h-4 text-slate-600" />
-            <span>Delayed Milestone Breakdown:</span>
-          </span>
-          <span className="text-[10px] font-mono text-slate-500 font-normal">
-            Impact: +{netVarianceDays}d
-          </span>
-        </div>
+      {/* 2. Clear Milestone Delay & Recovery Cards (Collapsible Dropdown Body) */}
+      {isOpen && (
+        <div className="p-4 space-y-3 bg-slate-50/50 border-t border-slate-800/20 animate-fadeIn">
+          <div className="flex items-center justify-between text-xs text-slate-600 font-bold px-1">
+            <span className="flex items-center gap-1.5 text-slate-800">
+              <Clock className="w-4 h-4 text-slate-600" />
+              <span>Milestone Schedule Log:</span>
+            </span>
+            <span className="text-[10px] font-mono text-slate-500 font-normal">
+              Net Impact: +{effectiveDelayDays}d
+            </span>
+          </div>
 
-        <div className="space-y-2.5">
-          {delaySteps.map((step, idx) => {
-            const isRecovery = step.isRecovery;
+          <div className="space-y-2.5">
+            {delaySteps.map((step, idx) => {
+              const isRecovery = step.isRecovery;
 
-            return (
-              <div
-                key={step.stageKey + idx}
-                className={`p-3.5 rounded-xl border bg-white shadow-2xs transition-all space-y-2 ${
-                  isRecovery
-                    ? 'border-emerald-300 bg-emerald-50/30'
-                    : step.isRootCause
-                    ? 'border-rose-300 ring-1 ring-rose-200/70'
-                    : 'border-amber-300'
-                }`}
-              >
-                {/* Stage Title and Badges */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="w-5 h-5 rounded-full bg-slate-100 border border-slate-300 text-slate-700 flex items-center justify-center font-bold text-[10px] font-mono">
-                      {step.stageOrder}
-                    </span>
-                    
-                    <span className="font-bold text-slate-900 text-xs">
-                      Stage {step.stageOrder}. {step.stageName}
-                    </span>
-
-                    {isRecovery ? (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
-                        <Zap className="w-3 h-3 text-emerald-600" />
-                        {step.stageDelayAdded}d Recovered
+              return (
+                <div
+                  key={step.stageKey + idx}
+                  className={`p-3.5 rounded-xl border bg-white shadow-2xs transition-all space-y-2 ${
+                    isRecovery
+                      ? 'border-emerald-300 bg-emerald-50/20'
+                      : step.isRootCause
+                      ? 'border-rose-300 ring-1 ring-rose-200/70'
+                      : 'border-amber-300'
+                  }`}
+                >
+                  {/* Stage Title and Badges */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="w-5 h-5 rounded-full bg-slate-100 border border-slate-300 text-slate-700 flex items-center justify-center font-bold text-[10px] font-mono">
+                        {step.stageOrder}
                       </span>
-                    ) : (
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
-                        step.isRootCause 
-                          ? 'bg-rose-100 text-rose-800 border-rose-300' 
-                          : 'bg-amber-100 text-amber-800 border-amber-300'
-                      }`}>
-                        +{step.stageDelayAdded} {step.stageDelayAdded === 1 ? 'Day Delay' : 'Days Delay'}
+                      
+                      <span className="font-bold text-slate-900 text-xs">
+                        Stage {step.stageOrder}: {step.stageName.replace(/^\d+\.\s*/, '')}
                       </span>
-                    )}
 
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                      Running Total: <strong>+{step.cumulativeDelay}d</strong>
-                    </span>
+                      {isRecovery ? (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                          <Zap className="w-3 h-3 text-emerald-600" />
+                          {step.stageDelayAdded}d Recovered
+                        </span>
+                      ) : (
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                          step.isRootCause 
+                            ? 'bg-rose-100 text-rose-800 border-rose-300' 
+                            : 'bg-amber-100 text-amber-800 border-amber-300'
+                        }`}>
+                          +{step.stageDelayAdded} {step.stageDelayAdded === 1 ? 'Day Delay' : 'Days Delay'}
+                        </span>
+                      )}
 
-                    {step.delayCategory && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-white text-slate-600 border border-slate-300">
-                        {step.delayCategory}
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                        Running Total: <strong>+{step.cumulativeDelay}d</strong>
                       </span>
-                    )}
+
+                      {step.delayCategory && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-white text-slate-600 border border-slate-300">
+                          {step.delayCategory}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Dates */}
+                    <div className="text-[11px] font-mono text-slate-500 flex items-center gap-2 self-start sm:self-auto">
+                      <span>Target: <strong>{step.plannedDates.end}</strong></span>
+                      {step.actualDates.end && (
+                        <span className="text-slate-800">| Actual: <strong>{step.actualDates.end}</strong></span>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Dates */}
-                  <div className="text-[11px] font-mono text-slate-500 flex items-center gap-2 self-start sm:self-auto">
-                    <span>Target: <strong>{step.plannedDates.end}</strong></span>
-                    {step.actualDates.end && (
-                      <span className="text-slate-800">| Actual: <strong>{step.actualDates.end}</strong></span>
-                    )}
-                  </div>
+                  {/* Delay Reason Explanation */}
+                  {step.delayReason && (
+                    <div className="pt-2 border-t border-slate-100 text-xs text-slate-800 flex items-start gap-2 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                      <AlertCircle className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${isRecovery ? 'text-emerald-600' : 'text-rose-500'}`} />
+                      <div>
+                        <span className={`text-[10px] font-mono font-bold uppercase tracking-wider block ${isRecovery ? 'text-emerald-700' : 'text-rose-700'}`}>
+                          {isRecovery ? 'Recovery Note:' : 'Reason / Notes:'}
+                        </span>
+                        <span className="font-medium text-slate-900 text-xs leading-relaxed">
+                          {step.delayReason}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
-
-                {/* Delay Reason Explanation */}
-                {step.delayReason ? (
-                  <div className="pt-2 border-t border-slate-100 text-xs text-slate-800 flex items-start gap-2 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                    <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
-                    <div>
-                      <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-rose-700 block">
-                        Reason / Notes:
-                      </span>
-                      <span className="font-medium text-slate-900 text-xs leading-relaxed">
-                        {step.delayReason}
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  !isRecovery && (
-                    <div className="text-[11px] text-slate-500 italic pl-1">
-                      {step.isRootCause 
-                        ? 'Initial delay originated at this manufacturing stage.' 
-                        : `Additional schedule delay of +${step.stageDelayAdded}d accumulated during this stage.`
-                      }
-                    </div>
-                  )
-                )}
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
     </div>
   );

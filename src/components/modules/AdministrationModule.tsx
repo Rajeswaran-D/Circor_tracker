@@ -411,6 +411,8 @@ export const AdministrationModule: React.FC<AdministrationModuleProps> = ({ onSe
                       const isCompleted = po.status === 'Completed' || (po.isClosed && !isCancelled);
                       const revCount = po.revisions?.length || 0;
 
+                      const statusSummary = getPOManufacturingStatus(po);
+
                       return (
                         <tr key={po.id} className="hover:bg-slate-50/80 transition-colors">
                           <td className="py-3 px-4 font-mono font-bold text-emerald-800">
@@ -443,11 +445,11 @@ export const AdministrationModule: React.FC<AdministrationModuleProps> = ({ onSe
                           <td className="py-3 px-4">
                             <div className="space-y-1">
                               <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono border ${
-                                isCompleted ? 'bg-emerald-100 text-emerald-800 border-emerald-300' :
                                 isCancelled ? 'bg-rose-100 text-rose-800 border-rose-300' :
+                                isCompleted ? (statusSummary.delayDays > 0 ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-emerald-100 text-emerald-800 border-emerald-300') :
                                 'bg-blue-100 text-blue-800 border-blue-300'
                               }`}>
-                                {isCancelled ? 'CANCELLED' : isCompleted ? 'COMPLETED' : 'IN EXECUTION'}
+                                {isCancelled ? 'CANCELLED' : isCompleted ? (statusSummary.delayDays > 0 ? `COMPLETED BY DELAY OF ${statusSummary.delayDays} DAYS` : 'COMPLETED ON TIME') : 'IN EXECUTION'}
                               </span>
 
                               {isCancelled && (po.cancellationReason || po.closureNotes) && (
@@ -456,9 +458,10 @@ export const AdministrationModule: React.FC<AdministrationModuleProps> = ({ onSe
                                 </p>
                               )}
 
-                              {isCompleted && po.closureNotes && (
-                                <p className="text-[10px] text-emerald-700 line-clamp-1">
-                                  {po.closureNotes}
+                              {isCompleted && (
+                                <p className={`text-[10px] line-clamp-1 ${statusSummary.delayDays > 0 ? 'text-amber-800 font-medium' : 'text-emerald-700'}`}>
+                                  {statusSummary.delayDays > 0 ? `Completed with +${statusSummary.delayDays}d delay` : 'Delivered on original schedule'}
+                                  {po.closureNotes ? ` — ${po.closureNotes}` : ''}
                                 </p>
                               )}
                             </div>

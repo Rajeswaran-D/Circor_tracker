@@ -17,6 +17,7 @@ import {
   LayoutGrid
 } from 'lucide-react';
 import { getPOManufacturingStatus, getStageFriendlyName } from '../../utils/statusUtils';
+import { getDaysDifference, addDays } from '../../services/calculationEngine';
 import { BaselineRevisionModal } from './BaselineRevisionModal';
 import { OrderProgressOverview } from '../common/OrderProgressOverview';
 import { DelayAnalysisFlow } from '../common/DelayAnalysisFlow';
@@ -68,11 +69,11 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
   const delayedLines = (po.productLines || []).filter(l => l.status === 'Delayed' || (l.overallVarianceDays && l.overallVarianceDays > 0));
 
   const allMilestonesComplete = po.productLines.length > 0 && po.productLines.every(line =>
-    line.milestones.every(m => m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100)
+    (line.milestones || []).length > 0 && line.milestones.every(m => m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100)
   );
 
   const canClosePO = allMilestonesComplete || activeRole === 'Project Management' || activeRole === 'Project Manager (PM Baseline)' || activeRole === 'Stores (Shipment)';
-  const canReviseBaseline = activeRole === 'Project Manager (PM Baseline)';
+  const canReviseBaseline = activeRole === 'Project Manager (PM Baseline)' || activeRole === 'Project Management';
   const isAdmin = activeRole === 'Project Management';
   const hasPendingCancel = po.cancellationRequest?.status === 'Pending';
 
@@ -105,11 +106,17 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                 <h2 className="font-extrabold text-slate-900 text-lg">{po.poNumber}</h2>
                 <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
                   po.status === 'Cancelled' || po.isCancelled ? 'bg-rose-100 border-rose-300 text-rose-800' :
+                  po.isClosed ? (statusSummary.delayDays > 0 ? 'bg-amber-100 border-amber-300 text-amber-900' : 'bg-emerald-50 border-emerald-200 text-emerald-800') :
                   statusSummary.isDelayed ? 'bg-rose-50 border-rose-200 text-rose-800' :
-                  po.isClosed ? 'bg-slate-100 border-slate-200 text-slate-600' :
                   'bg-emerald-50 border-emerald-200 text-emerald-800'
                 }`}>
-                  {po.status === 'Cancelled' || po.isCancelled ? 'CANCELLED' : statusSummary.isDelayed ? `DELAYED (+${statusSummary.delayDays}d)` : po.isClosed ? 'CLOSED' : 'ON TIME'}
+                  {po.status === 'Cancelled' || po.isCancelled 
+                    ? 'CANCELLED' 
+                    : po.isClosed 
+                    ? (statusSummary.delayDays > 0 ? `COMPLETED BY DELAY OF ${statusSummary.delayDays} DAYS` : 'COMPLETED ON TIME') 
+                    : statusSummary.isDelayed 
+                    ? `DELAYED (+${statusSummary.delayDays}d)` 
+                    : 'ON TIME'}
                 </span>
                 {po.productLines && po.productLines.length > 1 && (
                   <div className="flex bg-slate-200 p-0.5 rounded-lg text-xs ml-1">
@@ -308,7 +315,14 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                 )}
                 <div>
                   <div className="font-bold text-slate-900">
-                    Step: Timeline Validation — {statusSummary.timelineValidationStatus === 'REQUIRES_REVISION_DELAYED' ? 'Delay Recorded — See Baseline for Reason' : 'Timeline Validated & On Track'}
+                    {statusSummary.timelineValidationStatus === 'CLOSED'
+                      ? 'Order Status: Closed & Delivered'
+                      : statusSummary.timelineValidationStatus === 'REQUIRES_REVISION_DELAYED'
+                      ? (po.status === 'Baseline Pending' ? 'Baseline Status: Approval Pending' : 'Schedule Status: Delay Recorded')
+                      : allMilestonesComplete
+                      ? 'Schedule Status: All Stages Completed'
+                      : 'Schedule Status: Validated & On Track'
+                    }
                   </div>
                   <p className="text-[11px] text-slate-600 mt-0.5">{statusSummary.timelineMessage}</p>
                 </div>
@@ -448,9 +462,13 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
 
                             {ALL_14_STAGES.map((st, sIdx) => {
                               const ms = (line.milestones || []).find(m => m.key === st.key);
+                              const prevM = sIdx > 0 ? (line.milestones || []).find(m => m.key === ALL_14_STAGES[sIdx - 1].key) : null;
+                              const currV = Math.max(0, typeof ms?.varianceDays === 'number' ? ms.varianceDays : 0);
+                              const prevV = prevM ? Math.max(0, typeof prevM?.varianceDays === 'number' ? prevM.varianceDays : 0) : 0;
                               const isStageDone = ms?.status === 'Completed' || Boolean(ms?.actualEndDate);
                               const isStageStarted = Boolean(ms?.actualStartDate) && !isStageDone;
-                              const isStageDelayed = ms?.status === 'Delayed' || (typeof ms?.varianceDays === 'number' && ms.varianceDays > 0);
+                              const isNewDelay = currV - prevV > 0;
+                              const hasShift = currV > 0 && !isNewDelay;
 
                               return (
                                 <td key={st.key} className="py-2 px-1 text-center">
@@ -459,16 +477,18 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                                       isStageDone
                                         ? 'bg-emerald-600 text-white shadow-2xs'
                                         : isStageStarted
-                                        ? isStageDelayed
+                                        ? isNewDelay
                                           ? 'bg-blue-600 text-white ring-2 ring-rose-400'
                                           : 'bg-blue-600 text-white ring-2 ring-blue-300'
-                                        : isStageDelayed
+                                        : isNewDelay
                                         ? 'bg-rose-500 text-white ring-1 ring-rose-300'
-                                        : 'bg-slate-200 text-slate-500'
+                                        : hasShift
+                                        ? 'bg-slate-200 text-slate-700'
+                                        : 'bg-slate-100 text-slate-400'
                                     }`}
                                     title={`${st.label}: ${ms?.status || 'Pending'} (${ms?.actualEndDate || ms?.forecastEndDate || 'Planned'})`}
                                   >
-                                    {isStageDone ? 'Done' : isStageStarted ? 'In Prog' : isStageDelayed ? 'Delay' : sIdx + 1}
+                                    {isStageDone ? 'Done' : isStageStarted ? 'In Prog' : isNewDelay ? 'Delay' : sIdx + 1}
                                   </span>
                                 </td>
                               );
@@ -504,9 +524,18 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                         Single master schedule governing all {po.productLines.length} product lines in PO {po.poNumber}.
                       </p>
                     </div>
-                    <span className="text-[10px] font-mono font-bold bg-cyan-50 text-cyan-800 border border-cyan-200 px-2.5 py-1 rounded-lg">
-                      Master Baseline Synced
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[10px] font-mono font-bold px-2.5 py-1 rounded-lg border ${
+                        Math.max(0, ...po.productLines.map(l => l.overallVarianceDays || 0)) > 0 
+                          ? 'bg-rose-50 text-rose-800 border-rose-300' 
+                          : 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                      }`}>
+                        Total Delay: {Math.max(0, ...po.productLines.map(l => l.overallVarianceDays || 0)) > 0 ? `+${Math.max(0, ...po.productLines.map(l => l.overallVarianceDays || 0))}d` : '0d (On Time)'}
+                      </span>
+                      <span className="text-[10px] font-mono font-bold bg-cyan-50 text-cyan-800 border border-cyan-200 px-2.5 py-1 rounded-lg">
+                        Master Baseline Synced
+                      </span>
+                    </div>
                   </div>
 
                   {/* Product Line Focus Selector */}
@@ -561,24 +590,39 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                         };
                       });
 
-                      const maxStageVariance = Math.max(0, ...productLineMilestones.map(p => p.varianceDays));
-                      const anyLineDelayed = productLineMilestones.some(p => p.isLineDelayed);
                       const allLinesDone = productLineMilestones.length > 0 && productLineMilestones.every(p => p.isLineDone);
 
+                      const prevMs = index > 0 ? selectedLine.milestones[index - 1] : null;
+                      const currVariance = Math.max(0, typeof ms.varianceDays === 'number' ? ms.varianceDays : 0);
+                      const prevVariance = prevMs ? Math.max(0, typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0) : 0;
+                      const addedDelayHere = Math.max(0, currVariance - prevVariance);
+                      const isNewDelayFormedAtThisStage = addedDelayHere > 0;
+                      const hasInheritedShift = currVariance > 0 && !isNewDelayFormedAtThisStage;
+
                       const isCompleted = ms.status === 'Completed' || Boolean(ms.actualEndDate) || allLinesDone;
+                      const recoveredDelay = isCompleted ? Math.max(0, prevVariance - currVariance) : 0;
                       const isStarted = (Boolean(ms.actualStartDate) || productLineMilestones.some(p => p.isLineStarted)) && !isCompleted;
                       const isInProgress = (isStarted || ms.status === 'In Progress') && !isCompleted;
                       const isPendingBaseline = po.status === 'Baseline Pending';
                       const activeStageIdx = selectedLine.milestones.findIndex(m => m.status !== 'Completed' && !m.actualEndDate);
                       const isCurrent = !isPendingBaseline && index === activeStageIdx;
-                      const isStageDelayed = !isCompleted && (ms.status === 'Delayed' || (typeof ms.varianceDays === 'number' && ms.varianceDays > 0) || anyLineDelayed || maxStageVariance > 0);
                       const friendlyName = getStageFriendlyName(ms.key, selectedLine);
 
-                      const displayStartDate = ms.actualStartDate || ms.forecastStartDate || ms.committedBaselineStartDate || po.poDate || 'Pending';
-                      const displayEndDate = ms.actualEndDate || ms.forecastEndDate || ms.committedBaselineEndDate || 'Pending';
+                      const bStart = ms.committedBaselineStartDate || po.poDate;
+                      const bEnd = ms.committedBaselineEndDate || po.committedDeliveryDate;
+                      const dur = Math.max(1, ms.committedDurationDays || 1);
+                      const baselineDuration = (bStart && bEnd) ? Math.max(1, getDaysDifference(bStart, bEnd)) : dur;
 
-                      const delayedLineWithReason = productLineMilestones.find(p => p.delayReason && !p.delayReason.startsWith('Cascaded delay'));
-                      const stageDelayReason = delayedLineWithReason?.delayReason || (ms.delayReason && !ms.delayReason.startsWith('Cascaded delay') ? ms.delayReason : undefined);
+                      const prevActualEnd = prevMs?.actualEndDate;
+                      const prevEffectiveEnd = prevActualEnd || prevMs?.forecastEndDate;
+                      const hasPrevDelayShift = Boolean(bStart && prevEffectiveEnd && prevEffectiveEnd > bStart);
+                      const shiftDays = (hasPrevDelayShift && bStart && prevEffectiveEnd) ? getDaysDifference(bStart, prevEffectiveEnd) : 0;
+
+                      const revisedStart = ms.actualStartDate || (hasPrevDelayShift ? prevEffectiveEnd : (bStart || ''));
+                      const revisedEnd = ms.actualEndDate || (shiftDays > 0 && revisedStart ? addDays(revisedStart, baselineDuration) : (bEnd || ''));
+
+                      const delayedLineWithReason = productLineMilestones.find(p => p.delayReason && !p.delayReason.startsWith('Cascaded delay') && !p.delayReason.startsWith('Inherited delay'));
+                      const stageDelayReason = delayedLineWithReason?.delayReason || (ms.delayReason && !ms.delayReason.startsWith('Cascaded delay') && !ms.delayReason.startsWith('Inherited delay') ? ms.delayReason : undefined);
 
                       return (
                         <React.Fragment key={ms.id}>
@@ -586,11 +630,15 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                           
                           {/* Node Bullet Icon */}
                           <div className={`absolute -left-6 top-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold border ${
-                            isCompleted ? 'bg-emerald-600 border-emerald-600 text-white' :
-                            isStageDelayed ? 'bg-rose-500 border-rose-500 text-white' :
-                            isInProgress ? 'bg-blue-600 border-blue-600 text-white ring-2 ring-blue-400/40' :
-                            isCurrent ? 'bg-emerald-100 border-emerald-600 text-emerald-800 ring-2 ring-emerald-400/30' :
-                            'bg-slate-100 border-slate-300 text-slate-400'
+                            isCompleted 
+                              ? 'bg-emerald-600 border-emerald-600 text-white' 
+                              : isNewDelayFormedAtThisStage 
+                              ? 'bg-rose-500 border-rose-500 text-white' 
+                              : isInProgress 
+                              ? 'bg-blue-600 border-blue-600 text-white ring-2 ring-blue-400/40' 
+                              : isCurrent 
+                              ? 'bg-emerald-100 border-emerald-600 text-emerald-800 ring-2 ring-emerald-400/30' 
+                              : 'bg-slate-100 border-slate-300 text-slate-400'
                           }`}>
                             {isCompleted ? <CheckCircle2 className="w-3.5 h-3.5" /> : ms.stageOrder}
                           </div>
@@ -598,45 +646,108 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                           {/* Stage Information */}
                           <div className="flex-1">
                             <div className="flex items-center gap-2">
-                              <span className={`font-bold ${isCurrent ? 'text-emerald-950 text-sm' : isCompleted ? 'text-slate-800' : 'text-slate-500'}`}>
+                              <span className={`font-bold ${isCurrent ? 'text-emerald-950 text-sm' : isCompleted ? 'text-slate-800' : 'text-slate-600'}`}>
                                 {friendlyName}
                               </span>
 
                               <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
                                 isCompleted 
-                                  ? (maxStageVariance > 0 || stageDelayReason 
+                                  ? (isNewDelayFormedAtThisStage 
                                       ? 'bg-amber-50 border-amber-300 text-amber-900' 
+                                      : currVariance > 0 
+                                      ? 'bg-slate-100 border-slate-200 text-slate-700' 
+                                      : recoveredDelay > 0
+                                      ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
                                       : 'bg-emerald-50 border-emerald-200 text-emerald-800')
-                                  : isStageDelayed ? 'bg-rose-50 border-rose-200 text-rose-800 shadow-2xs'
-                                  : isInProgress ? 'bg-blue-50 border-blue-200 text-blue-800 shadow-2xs'
-                                  : isPendingBaseline ? 'bg-amber-50 border-amber-200 text-amber-800'
+                                  : isNewDelayFormedAtThisStage 
+                                  ? 'bg-rose-50 border-rose-200 text-rose-800 shadow-2xs font-bold'
+                                  : hasInheritedShift
+                                  ? 'bg-slate-100 border-slate-200 text-slate-600'
+                                  : isInProgress 
+                                  ? 'bg-blue-50 border-blue-200 text-blue-800 shadow-2xs'
+                                  : isPendingBaseline 
+                                  ? 'bg-amber-50 border-amber-200 text-amber-800'
                                   : 'bg-slate-100 border-slate-200 text-slate-500'
                               }`}>
                                 {isCompleted 
-                                  ? (maxStageVariance > 0 ? `Completed (+${maxStageVariance}d late)` : 'Completed')
-                                  : isStageDelayed ? (maxStageVariance > 0 ? `Delayed (+${maxStageVariance}d)` : 'Delayed')
-                                  : isInProgress ? 'IN EXECUTION'
-                                  : isPendingBaseline ? 'Baseline Pending'
+                                  ? (isNewDelayFormedAtThisStage 
+                                      ? `Completed (+${addedDelayHere}d delay added)` 
+                                      : currVariance > 0 
+                                      ? (recoveredDelay > 0 
+                                          ? `Completed (${recoveredDelay === 1 ? '1 day' : `${recoveredDelay} days`} delay resolved, Previous: +${currVariance}d)` 
+                                          : `Completed (Previous: +${currVariance}d)`)
+                                      : recoveredDelay > 0 
+                                      ? `Completed (${recoveredDelay === 1 ? '1 day' : `${recoveredDelay} days`} delay resolved)` 
+                                      : 'Completed')
+                                  : isNewDelayFormedAtThisStage 
+                                  ? `Delay (+${addedDelayHere}d)`
+                                  : hasInheritedShift
+                                  ? (isInProgress ? `In Execution (Previous: +${currVariance}d)` : `Previous (+${currVariance}d)`)
+                                  : isInProgress 
+                                  ? 'IN EXECUTION'
+                                  : isPendingBaseline 
+                                  ? 'Baseline Pending'
                                   : 'Not Started'}
                               </span>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] font-mono mt-1 text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-200/80">
-                              <div>
-                                <span className="text-slate-400 font-semibold uppercase">{isStarted ? 'Actual Start:' : 'Planned Start:'}</span>{' '}
-                                <span className={`font-bold ${isStarted ? 'text-blue-700' : 'text-slate-800'}`}>
-                                  {displayStartDate}
-                                </span>
+                            <div className="mt-1.5 space-y-1.5 text-[10px] font-mono bg-slate-50 p-2.5 rounded-lg border border-slate-200/80">
+                              {/* Planned Baseline row */}
+                              <div className="flex flex-wrap items-center justify-between gap-2 text-slate-600">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-slate-400 font-semibold uppercase">Planned Baseline:</span>{' '}
+                                  <strong className="text-slate-800">{bStart || 'N/A'} &rarr; {bEnd || 'N/A'}</strong>
+                                  <span className="text-slate-500 font-medium">({baselineDuration}d planned)</span>
+                                </div>
+                                {shiftDays > 0 ? (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                    +{shiftDays}d shift from Stage {prevMs?.stageOrder || 'previous'} delay
+                                  </span>
+                                ) : (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                    On original baseline
+                                  </span>
+                                )}
                               </div>
-                              <div>
-                                <span className="text-slate-400 font-semibold uppercase">{isCompleted ? 'Actual End Date:' : 'Planned/Forecast End:'}</span>{' '}
-                                <span className={`font-bold ${isCompleted ? 'text-emerald-700' : 'text-slate-800'}`}>
-                                  {displayEndDate}
-                                </span>
-                              </div>
-                              {isCompleted && ms.actualEndDate && (
-                                <div className="text-emerald-700 font-semibold">
-                                  Passed on {ms.actualEndDate}
+
+                              {/* Revised Target (due to delay) */}
+                              {shiftDays > 0 && (
+                                <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-200/60 text-amber-900">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-amber-700 font-semibold uppercase">Revised (due to delay):</span>{' '}
+                                    <strong className="text-amber-950">{revisedStart} &rarr; {revisedEnd}</strong>
+                                  </div>
+                                  <span className="text-[9px] text-amber-700 font-medium">
+                                    Target start: {prevEffectiveEnd} (Previous end date)
+                                  </span>
+                                </div>
+                              )}
+
+                              {/* Actual Execution row (if started or completed) */}
+                              {(Boolean(ms.actualStartDate) || Boolean(ms.actualEndDate) || isCompleted || isStarted) && (
+                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1 border-t border-slate-200/60 text-slate-700">
+                                  <div>
+                                    <span className="text-slate-400 font-semibold uppercase">Actual Start:</span>{' '}
+                                    <strong className={ms.actualStartDate ? "text-blue-700 font-bold" : "text-slate-400"}>
+                                      {ms.actualStartDate || 'Pending'}
+                                    </strong>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-400 font-semibold uppercase">Actual End Date:</span>{' '}
+                                    <strong className={ms.actualEndDate ? "text-emerald-700 font-bold" : "text-slate-400"}>
+                                      {ms.actualEndDate || 'Pending'}
+                                    </strong>
+                                  </div>
+                                  {isCompleted && ms.actualEndDate && (
+                                    <div className="text-emerald-700 font-semibold flex items-center gap-1">
+                                      ✓ Passed on {ms.actualEndDate}
+                                      {recoveredDelay > 0 && (
+                                        <span className="text-emerald-800 font-bold">
+                                          • {recoveredDelay === 1 ? '1 day' : `${recoveredDelay} days`} delay resolved
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -644,40 +755,42 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                             {/* Multi-Product Progress Indicator */}
                             {po.productLines.length > 1 && (
                               <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                                {productLineMilestones.map(({ line, pIdx, isLineDone, isLineStarted, isLineDelayed, varianceDays }) => (
-                                  <span
-                                    key={line.id}
-                                    className={`px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1 border ${
-                                      isLineDone ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
-                                      isLineDelayed ? 'bg-rose-50 text-rose-800 border-rose-300 font-semibold' :
-                                      isLineStarted ? 'bg-blue-50 text-blue-800 border-blue-200' :
-                                      'bg-slate-100 text-slate-600 border-slate-200'
-                                    }`}
-                                  >
-                                    <span>#{pIdx + 1} {line.productName}:</span>
-                                    <strong>
-                                      {isLineDone ? 'Done' :
-                                       isLineDelayed ? `Delayed (+${varianceDays}d)` :
-                                       isLineStarted ? 'In Execution' :
-                                       'Pending'}
-                                    </strong>
-                                  </span>
-                                ))}
+                                {productLineMilestones.map(({ line, pIdx, isLineDone, isLineStarted, varianceDays }) => {
+                                  const pPrevMs = index > 0 ? line.milestones[index - 1] : null;
+                                  const pCurrVar = Math.max(0, typeof varianceDays === 'number' ? varianceDays : 0);
+                                  const pPrevVar = pPrevMs ? Math.max(0, typeof pPrevMs.varianceDays === 'number' ? pPrevMs.varianceDays : 0) : 0;
+                                  const pAddedDelay = Math.max(0, pCurrVar - pPrevVar);
+                                  const pHasInherited = pCurrVar > 0 && pAddedDelay === 0;
+
+                                  return (
+                                    <span
+                                      key={line.id}
+                                      className={`px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1 border ${
+                                        isLineDone ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
+                                        pAddedDelay > 0 ? 'bg-rose-50 text-rose-800 border-rose-300 font-semibold' :
+                                        pHasInherited ? 'bg-slate-100 text-slate-700 border-slate-200' :
+                                        isLineStarted ? 'bg-blue-50 text-blue-800 border-blue-200' :
+                                        'bg-slate-100 text-slate-600 border-slate-200'
+                                      }`}
+                                    >
+                                      <span>#{pIdx + 1} {line.productName}:</span>
+                                      <strong>
+                                        {isLineDone ? 'Done' :
+                                         pAddedDelay > 0 ? `Delay (+${pAddedDelay}d)` :
+                                         pHasInherited ? `Previous (+${pCurrVar}d)` :
+                                         isLineStarted ? 'In Execution' :
+                                         'Pending'}
+                                      </strong>
+                                    </span>
+                                  );
+                                })}
                               </div>
                             )}
 
                             {/* Display explicit delay reason on the milestone where delay was entered/occurred */}
-                            {stageDelayReason && (
+                            {isNewDelayFormedAtThisStage && stageDelayReason && (
                               <div className="text-[11px] text-rose-700 bg-rose-50 p-2 rounded-lg mt-1.5 border border-rose-100 flex items-center gap-1.5 font-medium">
                                 <span className="font-bold">Reason {delayedLineWithReason && po.productLines.length > 1 ? `(#${delayedLineWithReason.pIdx + 1}):` : ':'}</span> {stageDelayReason}
-                              </div>
-                            )}
-
-                            {/* For upcoming downstream milestones impacted by schedule shift, show simply the delay days count */}
-                            {isStageDelayed && !stageDelayReason && maxStageVariance > 0 && !isCompleted && (
-                              <div className="text-[11px] text-amber-800 bg-amber-50/80 p-1.5 px-2.5 rounded-lg mt-1.5 border border-amber-200/70 inline-flex items-center gap-1 font-mono font-medium">
-                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-                                <span>Baseline Delay: <strong className="text-amber-900 font-bold">+{maxStageVariance} {maxStageVariance === 1 ? 'day' : 'days'}</strong></span>
                               </div>
                             )}
                           </div>

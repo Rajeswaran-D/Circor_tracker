@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { X, AlertTriangle, ShieldCheck, CheckCircle2 } from 'lucide-react';
 import type { Milestone, ProductLine, PurchaseOrder } from '../../types';
 import { isMilestoneOwnedByRole } from '../../types';
-import { getDaysDifference, todayLocal, mergeDelayReason } from '../../services/calculationEngine';
+import { getDaysDifference, todayLocal, addDays } from '../../services/calculationEngine';
 
 interface ManualInputModalProps {
   isOpen: boolean;
@@ -30,13 +30,15 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
   const previousMsActualEnd = previousMs?.actualEndDate;
   const previousMsEnd = previousMsActualEnd
     || (previousMs ? (previousMs.forecastEndDate || previousMs.committedBaselineEndDate) : undefined);
+  const prevEffectiveEnd = previousMsActualEnd || previousMs?.forecastEndDate;
   // Minimum selectable date for start events: must be >= previous milestone's actual end date if available
   const startMinDate = previousMsActualEnd || milestone.committedBaselineStartDate;
-  const currentMsStart = milestone.actualStartDate || previousMsActualEnd || milestone.committedBaselineStartDate;
+  // Floor for completion date must only be an actual event (actual start or previous actual end)
+  const currentMsStart = milestone.actualStartDate || previousMsActualEnd;
 
   const rawDefault = eventType === 'start'
-    ? (milestone.actualStartDate || previousMsActualEnd || milestone.committedBaselineStartDate || todayStr)
-    : (milestone.actualEndDate || milestone.actualStartDate || milestone.committedBaselineEndDate || todayStr);
+    ? (milestone.actualStartDate || previousMsActualEnd || prevEffectiveEnd || milestone.committedBaselineStartDate || todayStr)
+    : (milestone.actualEndDate || milestone.actualStartDate || previousMsActualEnd || todayStr);
 
   const defaultInitialDate = rawDefault;
 
@@ -51,15 +53,62 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  useEffect(() => {
+    setEventDate(defaultInitialDate);
+    setBackdateReason('');
+    setCustomDelayReason('');
+    setErrorMessage(null);
+  }, [isOpen, milestone.id, eventType, defaultInitialDate]);
+
   if (!isOpen) return null;
 
   const isRoleAuthorized = isMilestoneOwnedByRole(milestone.key, activeRole);
   const isPreviousDone = !previousMs || previousMs.status === 'Completed' || Boolean(previousMs.actualEndDate) || previousMs.completionPct === 100;
 
-  const comparisonDate = eventType === 'start' ? milestone.committedBaselineStartDate : milestone.committedBaselineEndDate;
-  const isDelayedDate = eventDate > comparisonDate;
+  const dur = Math.max(1, milestone.committedDurationDays || 1);
+  const baselineStart = milestone.committedBaselineStartDate;
+  const baselineEnd = milestone.committedBaselineEndDate;
+  const baselineDuration = (baselineStart && baselineEnd) ? Math.max(1, getDaysDifference(baselineStart, baselineEnd)) : dur;
+
+  let totalDelay = 0;
+  let inheritedDelayDays = 0;
+  let newDelayFormed = 0;
+  let revisedTarget = '';
+
+  if (eventType === 'start') {
+    totalDelay = (baselineStart && eventDate > baselineStart)
+      ? getDaysDifference(baselineStart, eventDate)
+      : 0;
+    inheritedDelayDays = (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart)
+      ? Math.min(totalDelay, getDaysDifference(baselineStart, prevEffectiveEnd))
+      : 0;
+    newDelayFormed = Math.max(0, totalDelay - inheritedDelayDays);
+    revisedTarget = (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart)
+      ? prevEffectiveEnd
+      : (baselineStart || '');
+  } else {
+    totalDelay = (baselineEnd && eventDate > baselineEnd)
+      ? getDaysDifference(baselineEnd, eventDate)
+      : 0;
+    const effectiveStart = milestone.actualStartDate || ((baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart) ? prevEffectiveEnd : baselineStart);
+    const startDelay = (baselineStart && effectiveStart && effectiveStart > baselineStart)
+      ? getDaysDifference(baselineStart, effectiveStart)
+      : 0;
+    inheritedDelayDays = Math.min(totalDelay, startDelay);
+    newDelayFormed = Math.max(0, totalDelay - inheritedDelayDays);
+
+    revisedTarget = startDelay > 0 && effectiveStart ? addDays(effectiveStart, baselineDuration) : (baselineEnd || '');
+  }
+
+  const targetRevisedStart = milestone.actualStartDate || ((baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart) ? prevEffectiveEnd : (baselineStart || ''));
+  const precedingStartDelay = (baselineStart && targetRevisedStart && targetRevisedStart > baselineStart)
+    ? getDaysDifference(baselineStart, targetRevisedStart)
+    : 0;
+  const targetRevisedEnd = precedingStartDelay > 0 && targetRevisedStart
+    ? addDays(targetRevisedStart, baselineDuration)
+    : (baselineEnd || '');
+
   const isBackdated = eventDate < todayStr;
-  const delayDaysCount = isDelayedDate ? Math.max(1, getDaysDifference(comparisonDate, eventDate)) : 0;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,12 +146,12 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
       return;
     }
 
-    if (isDelayedDate && !customDelayReason.trim()) {
-      setErrorMessage('A delay reason is required when the selected date is later than the baseline.');
+    if (newDelayFormed > 0 && !customDelayReason.trim()) {
+      setErrorMessage(`A delay reason is required because the date entered (${eventDate}) adds +${newDelayFormed}d delay beyond the revised plan (${revisedTarget}).`);
       return;
     }
 
-    const effectiveDelayReason = isDelayedDate
+    const effectiveDelayReason = customDelayReason.trim()
       ? customDelayReason.trim()
       : undefined;
 
@@ -183,11 +232,28 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
             </div>
           )}
 
-          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg">
-            <div className="font-bold text-slate-900 text-xs">{milestone.name}</div>
-            <div className="flex justify-between text-[11px] text-slate-500 mt-1 font-mono">
-              <span>Planned {eventType === 'start' ? 'Start' : 'End'}: <strong className="text-slate-700">{comparisonDate}</strong></span>
-              <span>Default Duration: {milestone.committedDurationDays} days</span>
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs">
+            <div className="flex items-center justify-between">
+              <div className="font-bold text-slate-900">{milestone.name}</div>
+              <span className="font-mono text-[10px] font-bold text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200">
+                {baselineDuration} days planned
+              </span>
+            </div>
+            <div className="space-y-1.5 pt-1.5 border-t border-slate-200/60 font-mono text-[11px]">
+              <div className="flex items-center justify-between text-slate-600">
+                <span>Planned Baseline: <strong className="text-slate-800">{baselineStart || 'N/A'} &rarr; {baselineEnd || 'N/A'}</strong></span>
+                <span className="text-[10px] text-slate-500 font-semibold">{baselineDuration} days planned</span>
+              </div>
+              <div className="flex items-center justify-between pt-1 border-t border-slate-200/40">
+                <span className={precedingStartDelay > 0 ? "text-amber-800" : "text-emerald-700"}>
+                  Revised Target: <strong className={precedingStartDelay > 0 ? "text-amber-950" : "text-emerald-900"}>{targetRevisedStart || baselineStart || 'N/A'} &rarr; {targetRevisedEnd || baselineEnd || 'N/A'}</strong>
+                </span>
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+                  precedingStartDelay > 0 ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-emerald-50 text-emerald-800 border-emerald-200"
+                }`}>
+                  {precedingStartDelay > 0 ? `+${precedingStartDelay}d shift from previous delay` : 'On original baseline'}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -213,87 +279,121 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
           </div>
 
           {/* Status feedback & Delay Calculation */}
-          {!isDelayedDate ? (
+          {totalDelay <= 0 ? (
             <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-800 text-[11px] font-semibold flex items-center justify-between">
               <span>Within Planned Time — No delay detected.</span>
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             </div>
-          ) : (
+          ) : newDelayFormed > 0 ? (
             <div className="space-y-3">
-              <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-800 text-[11px] font-semibold flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                <span>Delay Detected at <strong>{milestone.name}</strong>: +{delayDaysCount} days delay formed.</span>
+              <div className="p-3 bg-rose-50 border border-rose-300 rounded-lg text-rose-800 text-[11px] font-semibold flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>New Delay Formed at <strong>Stage {milestone.stageOrder}: {milestone.name.replace(/^\d+\.\s*/, '')}</strong>: <strong className="text-rose-700">+{newDelayFormed}d Added</strong></span>
+                </div>
+                {inheritedDelayDays > 0 && (
+                  <span className="text-[10px] font-mono text-slate-500">(+{inheritedDelayDays}d prior inherited)</span>
+                )}
               </div>
               <div className="space-y-2">
                 {(() => {
-                  const prevEffectiveEnd = previousMs ? (previousMs.actualEndDate || previousMs.forecastEndDate) : undefined;
-                  const prevBaselineEnd = previousMs?.committedBaselineEndDate;
-                  const netInheritedDelay = prevEffectiveEnd && prevBaselineEnd
-                    ? Math.max(0, getDaysDifference(prevBaselineEnd, prevEffectiveEnd))
-                    : (previousMs && typeof previousMs.varianceDays === 'number' && previousMs.varianceDays > 0 ? previousMs.varianceDays : 0);
-
                   const prevMilestones = (productLine.milestones || []).slice(0, msIndex);
                   const prevDelaysList = prevMilestones
-                    .map((m: Milestone) => {
-                      let days = 0;
-                      if (m.actualEndDate && m.committedBaselineEndDate) {
-                        days = Math.max(0, getDaysDifference(m.committedBaselineEndDate, m.actualEndDate));
-                      } else if (typeof m.varianceDays === 'number' && m.varianceDays > 0) {
-                        days = m.varianceDays;
-                      }
-                      return { ...m, calculatedDelayDays: days };
+                    .map((m, mIdx) => {
+                      const prevM = mIdx > 0 ? prevMilestones[mIdx - 1] : null;
+                      const currVar = Math.max(0, typeof m.varianceDays === 'number' ? m.varianceDays : 0);
+                      const prevVar = prevM ? Math.max(0, typeof prevM.varianceDays === 'number' ? prevM.varianceDays : 0) : 0;
+                      const stageDelta = currVar - prevVar;
+                      return { ...m, calculatedDelayDays: stageDelta };
                     })
-                    .filter(m => m.calculatedDelayDays > 0 || (Boolean(m.delayReason) && !m.delayReason?.startsWith('Cascaded') && !m.delayReason?.startsWith('Inherited')));
+                    .filter(m => m.calculatedDelayDays > 0);
 
                   return (
                     <>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="block text-slate-700 font-semibold text-xs">
-                          Actual Reason for Delay <span className="text-rose-600">*</span>
-                        </label>
-                        <div className="flex items-center gap-1.5">
-                          {netInheritedDelay > 0 && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const breakdown = prevDelaysList.map(m => `${m.name} (+${m.calculatedDelayDays}d${m.delayReason ? `: ${m.delayReason}` : ''})`).join('; ');
-                                const sum = `Inherited delay from preceding stages (+${netInheritedDelay}d)${breakdown ? ` [${breakdown}]` : ''}`;
-                                setCustomDelayReason(prev => mergeDelayReason(prev, sum));
-                              }}
-                              className="text-[10px] text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 font-bold px-2 py-0.5 rounded cursor-pointer shadow-2xs"
-                            >
-                              Append Previous Delays (+{netInheritedDelay}d)
-                            </button>
-                          )}
-                          {previousMs && (
-                            <button
-                              type="button"
-                              onClick={() => setCustomDelayReason(`Delay cascaded from previous stage: ${previousMs.name}${previousMs.delayReason ? ` (${previousMs.delayReason})` : ''}`)}
-                              className="text-[10px] text-slate-600 hover:text-slate-900 underline font-medium cursor-pointer"
-                            >
-                              Preceding Stage
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      {netInheritedDelay > 0 && prevDelaysList.length > 0 && (
+                      {inheritedDelayDays > 0 && prevDelaysList.length > 0 && (
                         <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg space-y-0.5 text-[10px] font-mono text-amber-900">
-                          <div className="font-bold text-amber-950">Preceding Stage Delays:</div>
+                          <div className="font-bold text-amber-950">Preceding Delay Sources:</div>
                           {prevDelaysList.map((m, i) => (
-                            <div key={i} className="truncate">• Stage {m.stageOrder}. {m.name}: <strong className="text-rose-700">+{m.calculatedDelayDays}d</strong> {m.delayReason ? `("${m.delayReason}")` : m.delayCategory ? `(${m.delayCategory})` : ''}</div>
+                            <div key={i} className="truncate">
+                              • Stage {m.stageOrder}: {m.name.replace(/^\d+\.\s*/, '')}: <strong className="text-rose-700">+{m.calculatedDelayDays}d Delay Added</strong>
+                              {m.delayReason && <span className="text-slate-600 font-normal"> — {m.delayReason}</span>}
+                            </div>
                           ))}
+                          <div className="pt-0.5 font-bold text-amber-950 border-t border-amber-200/60 flex justify-between">
+                            <span>Total Cumulative Delay:</span>
+                            <span className="text-rose-700 font-bold">+{totalDelay}d</span>
+                          </div>
                         </div>
                       )}
                     </>
                   );
                 })()}
+                <label className="block text-rose-950 font-bold text-xs">
+                  Reason for +{newDelayFormed}d Delay Formed at this Stage <span className="text-rose-600">*</span>
+                </label>
                 <input
                   type="text"
-                  placeholder="Explain reason for delay (e.g. Sub-tier casting delay / NDT test re-inspection)..."
+                  placeholder="Explain reason for this stage's delay (e.g. Sub-tier casting delay / NDT re-inspection)..."
                   value={customDelayReason}
                   onChange={(e) => setCustomDelayReason(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:border-emerald-600"
+                  className="w-full px-3 py-2 bg-white border border-rose-300 rounded-lg text-slate-900 font-bold text-xs focus:outline-none focus:border-rose-600 placeholder:font-normal placeholder:text-rose-400"
+                  required
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-900 text-[11px] font-semibold flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-blue-600 shrink-0" />
+                  <span>Preceding Delay: <strong className="text-rose-700 font-mono">+{inheritedDelayDays}d Inherited</strong> (No new delay formed at Stage {milestone.stageOrder})</span>
+                </div>
+                <span className="text-[10px] font-mono font-bold text-blue-800 bg-white px-2 py-0.5 rounded border border-blue-300">
+                  Total Delay: +{totalDelay}d
+                </span>
+              </div>
+
+              {(() => {
+                const prevMilestones = (productLine.milestones || []).slice(0, msIndex);
+                const prevDelaysList = prevMilestones
+                  .map((m, mIdx) => {
+                    const prevM = mIdx > 0 ? prevMilestones[mIdx - 1] : null;
+                    const currVar = Math.max(0, typeof m.varianceDays === 'number' ? m.varianceDays : 0);
+                    const prevVar = prevM ? Math.max(0, typeof prevM.varianceDays === 'number' ? prevM.varianceDays : 0) : 0;
+                    const stageDelta = currVar - prevVar;
+                    return { ...m, calculatedDelayDays: stageDelta };
+                  })
+                  .filter(m => m.calculatedDelayDays > 0);
+
+                if (inheritedDelayDays <= 0 || prevDelaysList.length === 0) return null;
+
+                return (
+                  <div className="p-2 bg-blue-100/60 border border-blue-200 rounded-lg space-y-0.5 text-[10px] font-mono text-blue-900">
+                    <div className="font-bold text-blue-950">Preceding Delay Sources:</div>
+                    {prevDelaysList.map((m, i) => (
+                      <div key={i} className="truncate">
+                        • Stage {m.stageOrder}: {m.name.replace(/^\d+\.\s*/, '')}: <strong className="text-rose-700">+{m.calculatedDelayDays}d Delay Added</strong>
+                        {m.delayReason && <span className="text-slate-600 font-normal"> — {m.delayReason}</span>}
+                      </div>
+                    ))}
+                    <div className="pt-0.5 font-bold text-blue-950 border-t border-blue-200/60 flex justify-between">
+                      <span>Total Cumulative Delay:</span>
+                      <span className="text-rose-700 font-bold">+{totalDelay}d</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="space-y-2">
+                <label className="block text-slate-700 font-medium text-xs">
+                  Optional Notes (defaults to 'Inherited delay (+{inheritedDelayDays}d)')
+                </label>
+                <input
+                  type="text"
+                  placeholder="Optional notes or remarks..."
+                  value={customDelayReason}
+                  onChange={(e) => setCustomDelayReason(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:border-blue-600 font-medium"
                 />
               </div>
             </div>

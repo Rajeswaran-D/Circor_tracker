@@ -1,4 +1,5 @@
 import type { PurchaseOrder, MilestoneStatus } from '../types';
+import { getDaysDifference } from '../services/calculationEngine';
 
 export interface POStatusSummary {
   currentStageKey: string;
@@ -43,12 +44,14 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
   );
   const firstLine = po.productLines[0];
   const firstLineMilestones = firstLine?.milestones || [];
-  const totalStagesCount = 14;
-  const completedStagesCount = firstLineMilestones.filter(m => m.status === 'Completed').length;
-  const progressPercent = Math.round((completedStagesCount / 14) * 100);
+  const totalStagesCount = firstLineMilestones.length || 14;
+  const completedStagesCount = firstLineMilestones.filter(m => m.status === 'Completed' || Boolean(m.actualEndDate)).length;
+  const progressPercent = totalStagesCount > 0 ? Math.round((completedStagesCount / totalStagesCount) * 100) : 0;
 
-  const allCompleted = completedStagesCount >= 14;
-  const isOrderFinished = po.isClosed || po.status === 'Completed' || allCompleted;
+  const allCompleted = totalStagesCount > 0 && completedStagesCount === totalStagesCount && po.productLines.every(l =>
+    (l.milestones || []).length > 0 && (l.milestones || []).every(m => m.status === 'Completed' || Boolean(m.actualEndDate))
+  );
+  const isOrderFinished = po.isClosed || (allCompleted && po.status === 'Completed');
 
   // Find the earliest active milestone across every product line.
   const activeEntry = lineEntries
@@ -59,27 +62,80 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
   const milestones = line?.milestones || [];
   const activeMilestone = activeEntry?.milestone || milestones[milestones.length - 1];
 
-  // Highest net forecasted delay across all product lines in the PO
+  // Highest net recorded variance across all product lines in the PO
   const maxPOVariance = Math.max(...po.productLines.map(l => l.overallVarianceDays || 0), 0);
 
-  // Active delayed entries on currently executing or un-recovered stages
-  const activeDelayedEntries = lineEntries
-    .filter(({ milestone }) => 
-      !milestone.actualEndDate && 
-      (milestone.status === 'Delayed' || (typeof milestone.varianceDays === 'number' && milestone.varianceDays > 0))
-    )
-    .sort((a, b) => a.milestone.stageOrder - b.milestone.stageOrder);
+  // Comprehensive check of line delays (final milestone variance, date shift past baseline, or last completed stage variance)
+  const lineDelays = po.productLines.map(pLine => {
+    const msList = pLine.milestones || [];
+    const lineVar = Math.max(0, typeof pLine.overallVarianceDays === 'number' ? pLine.overallVarianceDays : 0);
+    
+    // Check final milestone of line
+    const lastMs = msList[msList.length - 1];
+    const lastMsVar = lastMs ? Math.max(0, typeof lastMs.varianceDays === 'number' ? lastMs.varianceDays : 0) : 0;
+    const lastMsBaseEnd = lastMs?.committedBaselineEndDate || po.committedDeliveryDate;
+    const lastMsActualEnd = lastMs?.actualEndDate || lastMs?.forecastEndDate;
+    const lastMsDiff = (lastMsActualEnd && lastMsBaseEnd && lastMsActualEnd > lastMsBaseEnd)
+      ? getDaysDifference(lastMsBaseEnd, lastMsActualEnd)
+      : 0;
 
-  // Historical delayed entries where a delay reason was recorded
-  const historicalDelayedEntries = lineEntries
-    .filter(({ milestone }) => 
-      milestone.status === 'Delayed' || 
-      Boolean(milestone.delayReason) || 
-      (typeof milestone.varianceDays === 'number' && milestone.varianceDays > 0)
-    )
-    .sort((a, b) => a.milestone.stageOrder - b.milestone.stageOrder);
+    // Check last completed milestone
+    const completedMsList = msList.filter(m => m.status === 'Completed' || Boolean(m.actualEndDate));
+    const lastDone = completedMsList[completedMsList.length - 1];
+    const lastDoneVar = lastDone ? Math.max(0, typeof lastDone.varianceDays === 'number' ? lastDone.varianceDays : 0) : 0;
+    const lastDoneBaseEnd = lastDone?.committedBaselineEndDate;
+    const lastDoneActualEnd = lastDone?.actualEndDate;
+    const lastDoneDiff = (lastDoneActualEnd && lastDoneBaseEnd && lastDoneActualEnd > lastDoneBaseEnd)
+      ? getDaysDifference(lastDoneBaseEnd, lastDoneActualEnd)
+      : 0;
 
-  const delayedEntry = activeDelayedEntries[0] || historicalDelayedEntries[0];
+    return Math.max(lineVar, lastMsVar, lastMsDiff, lastDoneVar, lastDoneDiff);
+  });
+
+  const poDateDiff = (po.revisedDeliveryDate && po.committedDeliveryDate && po.revisedDeliveryDate > po.committedDeliveryDate)
+    ? getDaysDifference(po.committedDeliveryDate, po.revisedDeliveryDate)
+    : 0;
+
+  const totalCalculatedDelay = Math.max(0, maxPOVariance, ...lineDelays, poDateDiff);
+
+  // Find all stages that actually introduced a delay (stageDelta > 0 or explicit delay reason with positive variance)
+  const delayOriginEntries: Array<{
+    line: typeof line;
+    milestone: typeof activeMilestone;
+    delta: number;
+    varianceDays: number;
+    delayReason?: string;
+  }> = [];
+
+  po.productLines.forEach(pLine => {
+    const mList = pLine.milestones || [];
+    for (let i = 0; i < mList.length; i++) {
+      const ms = mList[i];
+      const prev = i > 0 ? mList[i - 1] : null;
+      const currVar = Math.max(0, typeof ms.varianceDays === 'number' ? ms.varianceDays : 0);
+      const prevVar = prev ? Math.max(0, typeof prev.varianceDays === 'number' ? prev.varianceDays : 0) : 0;
+      const delta = currVar - prevVar;
+      const hasExplicitReason = Boolean(ms.delayReason) && !ms.delayReason?.startsWith('Inherited') && !ms.delayReason?.startsWith('Cascaded');
+
+      if ((delta > 0 && currVar > 0) || (hasExplicitReason && currVar > 0)) {
+        delayOriginEntries.push({
+          line: pLine,
+          milestone: ms,
+          delta: Math.max(delta, 0),
+          varianceDays: currVar,
+          delayReason: ms.delayReason
+        });
+      }
+    }
+  });
+
+  // Root delay entry prioritization:
+  // 1. Stage with an explicit non-inherited delay reason
+  // 2. Stage with the largest incremental delay added (delta)
+  // 3. Earliest stage that introduced delay
+  const entryWithExplicitReason = delayOriginEntries.find(e => e.delayReason && !e.delayReason.startsWith('Inherited') && !e.delayReason.startsWith('Cascaded'));
+  const entryWithMaxDelta = [...delayOriginEntries].sort((a, b) => b.delta - a.delta)[0];
+  const rootDelayEntry = entryWithExplicitReason || entryWithMaxDelta || delayOriginEntries[0];
 
   let stageName = activeMilestone ? getStageFriendlyName(activeMilestone.key, line) : '1. Customer PO Intake';
 
@@ -91,53 +147,51 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
     ? 'Completed' 
     : (activeMilestone?.actualStartDate || activeMilestone?.status === 'In Progress' ? 'In Progress' : (activeMilestone?.status || 'In Progress'));
 
-  // An order is delayed if there is an active schedule variance or active delayed stage
-  const isDelayed = !isOrderFinished && (
-    po.status === 'Delayed' ||
-    maxPOVariance > 0 ||
-    po.productLines.some(productLine => productLine.status === 'Delayed' || (productLine.overallVarianceDays || 0) > 0) ||
-    activeDelayedEntries.length > 0 ||
-    (activeMilestone && (activeMilestone.status === 'Delayed' || (activeMilestone.varianceDays || 0) > 0))
-  );
-
-  // Delayed stage name matches the active delayed stage or root delay source
-  const delayedStageName = isDelayed
-    ? (activeDelayedEntries[0] 
-        ? getStageFriendlyName(activeDelayedEntries[0].milestone.key, activeDelayedEntries[0].line) 
-        : (delayedEntry ? getStageFriendlyName(delayedEntry.milestone.key, delayedEntry.line) : (activeMilestone ? getStageFriendlyName(activeMilestone.key, line) : 'Production')))
-    : undefined;
-
-  // Net delay variance days correctly tallied from active overall variance
-  const delayDays = isDelayed
-    ? (maxPOVariance > 0
-        ? maxPOVariance
-        : (activeMilestone && typeof activeMilestone.varianceDays === 'number' && activeMilestone.varianceDays > 0)
-          ? activeMilestone.varianceDays
-          : (activeDelayedEntries[0] && typeof activeDelayedEntries[0].milestone.varianceDays === 'number' && activeDelayedEntries[0].milestone.varianceDays > 0)
-            ? activeDelayedEntries[0].milestone.varianceDays
-            : (delayedEntry && typeof delayedEntry.milestone.varianceDays === 'number' && delayedEntry.milestone.varianceDays > 0)
-              ? delayedEntry.milestone.varianceDays
-              : 0)
+  const activeMilestoneVariance = activeMilestone && !activeMilestone.actualEndDate && typeof activeMilestone.varianceDays === 'number' && activeMilestone.varianceDays > 0
+    ? activeMilestone.varianceDays
     : 0;
 
-  const delayReason = isDelayed
-    ? (activeDelayedEntries[0]?.milestone.delayReason || delayedEntry?.milestone.delayReason || delayedEntry?.line.delayReason || activeMilestone?.delayReason || line.delayReason)
-    : undefined;
+  // Active delay flag for ongoing work
+  const isDelayed = !isOrderFinished && (totalCalculatedDelay > 0 || activeMilestoneVariance > 0);
+
+  // Delayed stage name matches the actual stage where the delay originated
+  const delayedStageName = (rootDelayEntry && rootDelayEntry.varianceDays > 0)
+    ? getStageFriendlyName(rootDelayEntry.milestone.key, rootDelayEntry.line)
+    : (activeMilestone ? getStageFriendlyName(activeMilestone.key, line) : undefined);
+
+  // Net delay days: preserved on finished/closed orders as well as active delayed orders
+  const delayDays = isOrderFinished
+    ? totalCalculatedDelay
+    : (isDelayed ? Math.max(totalCalculatedDelay, activeMilestoneVariance) : 0);
+
+  const delayReason = (rootDelayEntry?.delayReason && !rootDelayEntry.delayReason.startsWith('Inherited'))
+    ? rootDelayEntry.delayReason
+    : (line.delayReason && !line.delayReason.startsWith('Inherited') ? line.delayReason : undefined);
 
   const lastRevNum = (po.revisions && po.revisions.length > 0) ? po.revisions.length - 1 : 0;
 
   let timelineValidationStatus: 'VALIDATED_OK' | 'REQUIRES_REVISION_DELAYED' | 'CLOSED' = 'VALIDATED_OK';
-  let timelineMessage = `Timeline Validated — On schedule for delivery on ${po.revisedDeliveryDate || po.committedDeliveryDate} (Rev ${lastRevNum} Approved)`;
+  let timelineMessage = `On schedule for committed delivery on ${po.revisedDeliveryDate || po.committedDeliveryDate} (Rev ${lastRevNum} Approved).`;
 
-  if (po.status === 'Baseline Pending') {
-    timelineValidationStatus = 'REQUIRES_REVISION_DELAYED';
-    timelineMessage = `Baseline Pending — Awaiting PM review and initial baseline approval before work release.`;
-  } else if (isOrderFinished) {
+  if (po.isClosed) {
     timelineValidationStatus = 'CLOSED';
-    timelineMessage = `Order Closed & Delivered — Final Rev ${lastRevNum} Locked`;
+    timelineMessage = delayDays > 0
+      ? `Order closed & delivered to client with +${delayDays}d delay — Final Rev ${lastRevNum} archived.`
+      : `Order closed & delivered to client on schedule — Final Rev ${lastRevNum} archived.`;
+  } else if (po.status === 'Baseline Pending') {
+    timelineValidationStatus = 'REQUIRES_REVISION_DELAYED';
+    timelineMessage = `Baseline approval pending — Awaiting PM baseline sign-off before manufacturing kickoff.`;
   } else if (isDelayed) {
     timelineValidationStatus = 'REQUIRES_REVISION_DELAYED';
-    timelineMessage = `Timeline Action Required — +${delayDays}d delay calculated at ${delayedStageName || 'Production'}. Formal baseline review needed.`;
+    timelineMessage = `Action Required: +${delayDays}d delay at ${delayedStageName || 'Production'}. Schedule review needed.`;
+  } else if (allCompleted) {
+    timelineValidationStatus = 'VALIDATED_OK';
+    timelineMessage = delayDays > 0
+      ? `All manufacturing stages completed with +${delayDays}d delay — Ready for final dispatch sign-off and closure (Rev ${lastRevNum}).`
+      : `All manufacturing stages completed — Ready for final dispatch sign-off and closure (Rev ${lastRevNum}).`;
+  } else {
+    timelineValidationStatus = 'VALIDATED_OK';
+    timelineMessage = `On schedule for committed delivery on ${po.revisedDeliveryDate || po.committedDeliveryDate} (Rev ${lastRevNum} Approved).`;
   }
 
   return {

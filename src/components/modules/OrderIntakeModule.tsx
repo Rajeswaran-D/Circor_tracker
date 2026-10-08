@@ -122,18 +122,18 @@ export const OrderIntakeModule: React.FC = () => {
     );
 
   const validate = (): boolean => {
-    if (!customerName.trim()) { setErrorMsg("Customer name is required."); return false; }
-    
+    if (!customPoNumber.trim()) { setErrorMsg("PO Number is required. Please enter a unique PO Number."); return false; }
+
     // Strict PO Number Uniqueness validation
-    if (customPoNumber.trim()) {
-      const isDuplicate = purchaseOrders.some(
-        (p) => p.poNumber.trim().toLowerCase() === customPoNumber.trim().toLowerCase()
-      );
-      if (isDuplicate) {
-        setErrorMsg(`Duplicate PO Identifier: Purchase order "${customPoNumber.trim()}" already exists. PO numbers must be strictly unique.`);
-        return false;
-      }
+    const isDuplicate = purchaseOrders.some(
+      (p) => p.poNumber.trim().toLowerCase() === customPoNumber.trim().toLowerCase()
+    );
+    if (isDuplicate) {
+      setErrorMsg(`Duplicate PO Number: Purchase order "${customPoNumber.trim()}" already exists. PO numbers must be strictly unique.`);
+      return false;
     }
+
+    if (!customerName.trim()) { setErrorMsg("Customer name is required."); return false; }
 
     for (let i = 0; i < lines.length; i++) {
       const l = lines[i];
@@ -151,7 +151,7 @@ export const OrderIntakeModule: React.FC = () => {
   const handleCreate = () => {
     if (!validate()) return;
     const result = createPurchaseOrder({
-      poNumber: customPoNumber.trim() || undefined,
+      poNumber: customPoNumber.trim(),
       customerName: customerName.trim(),
       customerPoRef: customerPoRef.trim() || `PO-REF-${Date.now()}`,
       poDate: poStartDate || today,
@@ -255,15 +255,12 @@ export const OrderIntakeModule: React.FC = () => {
                     <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="e.g. Petrobras Offshore Ltd." className="w-full px-3.5 py-2.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-emerald-500 bg-white" />
                   </div>
                   <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="block text-xs font-semibold text-slate-700">PO Identifier</label>
-                      <span className="text-[10px] text-slate-400 font-mono">Optional</span>
-                    </div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">PO Number *</label>
                     <div className="relative">
                       <input
                         value={customPoNumber}
                         onChange={(e) => setCustomPoNumber(e.target.value)}
-                        placeholder="Auto-generated if empty"
+                        placeholder="e.g. PO-2026-001"
                         className={`w-full px-3.5 py-2.5 border rounded-lg text-sm focus:outline-none bg-white font-mono font-bold ${
                           customPoNumber.trim() && purchaseOrders.some(p => p.poNumber.trim().toLowerCase() === customPoNumber.trim().toLowerCase())
                             ? 'border-rose-400 text-rose-800 bg-rose-50/40 focus:border-rose-500'
@@ -281,11 +278,11 @@ export const OrderIntakeModule: React.FC = () => {
                           </span>
                         ) : (
                           <span className="text-emerald-700 font-semibold flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Strictly unique
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Strictly unique PO number
                           </span>
                         )
                       ) : (
-                        <span className="text-slate-400">Auto: PO-2026-XXX (Unique)</span>
+                        <span className="text-slate-400">Unique PO Identifier required</span>
                       )}
                     </div>
                   </div>
@@ -460,6 +457,7 @@ export const OrderIntakeModule: React.FC = () => {
                   <div className="space-y-3">
                     <p className="text-xs font-bold text-slate-700 uppercase tracking-wider">Order Summary</p>
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5 text-xs">
+                      <div className="flex justify-between"><span className="text-slate-500">PO Number</span><span className="font-mono font-bold text-emerald-900">{customPoNumber}</span></div>
                       <div className="flex justify-between"><span className="text-slate-500">Customer</span><span className="font-semibold text-slate-900">{customerName}</span></div>
                       {customerPoRef && <div className="flex justify-between"><span className="text-slate-500">Cust. PO Ref</span><span className="font-mono text-slate-700">{customerPoRef}</span></div>}
                       <div className="flex justify-between"><span className="text-slate-500">Total Lines</span><span className="font-bold text-slate-900">{lines.length} Product(s)</span></div>

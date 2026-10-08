@@ -160,7 +160,7 @@ export const PurchaseOrdersModule: React.FC<PurchaseOrdersModuleProps> = ({ onSe
               ) : (
                 filteredPOs.map((po) => {
                   const firstLine = po.productLines[0];
-                  const maxVariance = Math.max(...po.productLines.map(l => l.overallVarianceDays));
+                  const maxVariance = Math.max(...(po.productLines || []).map(l => l.overallVarianceDays || 0), 0);
                   const maxForecast = firstLine?.milestones.slice(-1)[0]?.forecastEndDate || po.revisedDeliveryDate;
 
                   return (
@@ -190,9 +190,9 @@ export const PurchaseOrdersModule: React.FC<PurchaseOrdersModuleProps> = ({ onSe
                       </td>
                       <td className="py-3.5 px-4 text-slate-600 font-mono">{po.committedDeliveryDate}</td>
                       <td className="py-3.5 px-4 text-slate-800 font-mono font-semibold">{maxForecast}</td>
-                      <td className="py-3.5 px-4 text-center font-mono font-bold">
-                        <span className={maxVariance > 0 ? 'text-rose-700' : maxVariance < 0 ? 'text-emerald-700' : 'text-slate-500'}>
-                          {maxVariance > 0 ? `+${maxVariance}d` : `${maxVariance}d`}
+                      <td className="py-3.5 px-4 text-center font-mono">
+                        <span className={maxVariance > 0 ? 'text-rose-700 font-bold' : 'text-emerald-700 font-medium'}>
+                          {maxVariance > 0 ? `+${maxVariance}d` : '0d'}
                         </span>
                       </td>
                       <td className="py-3.5 px-4">

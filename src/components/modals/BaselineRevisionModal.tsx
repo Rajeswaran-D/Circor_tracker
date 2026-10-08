@@ -180,7 +180,7 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
   const allPoDelays: { stageOrder: number; stageName: string; varianceDays: number; delayReason?: string }[] = [];
   po.productLines.forEach(line => {
     line.milestones.forEach(m => {
-      if ((typeof m.varianceDays === 'number' && m.varianceDays !== 0) || (m.delayReason && !m.delayReason.startsWith('Cascaded'))) {
+      if ((typeof m.varianceDays === 'number' && m.varianceDays > 0) || (m.delayReason && !m.delayReason.startsWith('Cascaded'))) {
         if (!allPoDelays.some(existing => existing.stageOrder === m.stageOrder && existing.delayReason === m.delayReason)) {
           allPoDelays.push({
             stageOrder: m.stageOrder,
@@ -298,10 +298,10 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
                 <div className="mt-1.5 p-2 bg-rose-50/60 border border-rose-100 rounded-lg text-[10px] text-rose-800 space-y-0.5">
                   <div className="font-semibold text-rose-950 flex items-center gap-1">
                     <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
-                    <span>Recorded milestone delays / recoveries across order:</span>
+                    <span>Recorded milestone delays across order:</span>
                   </div>
                   {allPoDelays.slice(0, 3).map((d, i) => (
-                    <div key={i} className="truncate">• Stage {d.stageOrder}. {d.stageName}: <strong className={d.varianceDays > 0 ? "text-rose-700" : "text-emerald-700"}>{d.varianceDays > 0 ? `+${d.varianceDays}d` : `${d.varianceDays}d`}</strong> {d.delayReason ? `("${d.delayReason}")` : d.varianceDays < 0 ? '(Time recovered)' : ''}</div>
+                    <div key={i} className="truncate">• Stage {d.stageOrder}: {d.stageName.replace(/^\d+\.\s*/, '')}: <strong className="text-rose-700">+{d.varianceDays}d</strong> {d.delayReason ? `("${d.delayReason}")` : ''}</div>
                   ))}
                   {allPoDelays.length > 3 && (
                     <div className="text-[9px] text-rose-600 italic">+ {allPoDelays.length - 3} more stage event(s)</div>
@@ -349,7 +349,19 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
                             {idx + 1}
                           </td>
                           <td className="py-2.5 px-4 font-semibold text-slate-800">
-                            {ms.name}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span>{ms.name}</span>
+                              {originalMs && typeof originalMs.varianceDays === 'number' && originalMs.varianceDays > 0 && (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                  +{originalMs.varianceDays}d Delay
+                                </span>
+                              )}
+                              {originalMs && typeof originalMs.varianceDays === 'number' && originalMs.varianceDays < 0 && (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  {originalMs.varianceDays}d Recovered
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-2.5 px-4 text-center">
                             <div className="flex items-center justify-center gap-2">

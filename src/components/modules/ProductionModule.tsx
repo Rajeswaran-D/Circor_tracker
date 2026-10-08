@@ -85,6 +85,15 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onOpenManual
                 const isCompleted = prodMs.status === 'Completed' || Boolean(prodMs.actualEndDate);
                 const isStarted = !!prodMs.actualStartDate && !isCompleted;
 
+                const pIdx = line.milestones.findIndex(m => m.id === prodMs.id || m.key === prodMs.key);
+                const prevMs = pIdx > 0 ? line.milestones[pIdx - 1] : null;
+                const currVar = Math.max(0, typeof prodMs.varianceDays === 'number' ? prodMs.varianceDays : 0);
+                const prevVar = prevMs ? Math.max(0, typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0) : 0;
+                const stageDelta = Math.max(0, currVar - prevVar);
+                const isNewDelay = stageDelta > 0;
+                const hasShift = currVar > 0 && !isNewDelay;
+                const recoveredDays = isCompleted ? Math.max(0, prevVar - currVar) : 0;
+
                 return (
                   <div key={line.id} className="p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
                     
@@ -115,12 +124,17 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onOpenManual
                         )}
 
                         <span className={`px-2.5 py-1 rounded-full text-[10px] font-mono font-bold border ${
-                          isCompleted ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
-                          isStarted ? 'bg-blue-100 border-blue-300 text-blue-900' :
-                          prodMs.status === 'Delayed' ? 'bg-rose-100 border-rose-300 text-rose-800' :
+                          isCompleted ? (recoveredDays > 0 ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800') :
+                          isStarted ? (isNewDelay ? 'bg-rose-100 border-rose-300 text-rose-800' : 'bg-blue-100 border-blue-300 text-blue-900') :
+                          isNewDelay ? 'bg-rose-100 border-rose-300 text-rose-800' :
+                          hasShift ? 'bg-slate-100 border-slate-200 text-slate-700' :
                           'bg-slate-100 border-slate-200 text-slate-600'
                         }`}>
-                          {isCompleted ? 'Completed' : isStarted ? (prodMs.status === 'Delayed' || (prodMs.varianceDays && prodMs.varianceDays > 0) ? `In Execution (+${prodMs.varianceDays}d)` : 'In Execution') : prodMs.status}
+                          {isCompleted ? (recoveredDays > 0 ? `Completed (${recoveredDays === 1 ? '1 day' : `${recoveredDays} days`} delay resolved)` : 'Completed') :
+                           isStarted ? (isNewDelay ? `In Execution (+${stageDelta}d delay added)` : hasShift ? `In Execution (Previous: +${currVar}d)` : 'In Execution') :
+                           isNewDelay ? `Delay (+${stageDelta}d)` :
+                           hasShift ? `Previous (+${currVar}d)` :
+                           prodMs.status}
                         </span>
                       </div>
                     </div>

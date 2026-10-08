@@ -181,7 +181,7 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
                         </div>
                         {statusSummary.isDelayed && (
                           <div className="text-[10px] text-rose-700 font-semibold mt-0.5">
-                            Delayed at {statusSummary.delayedStageName || statusSummary.currentStageName} ({statusSummary.delayDays > 0 ? `+${statusSummary.delayDays}d` : ''})
+                            Delayed
                           </div>
                         )}
                       </td>
@@ -212,7 +212,19 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
                       {/* Timeline Validation & Schedule Status */}
                       <td className="py-4 px-6 text-center">
                         <div className="flex flex-col items-center gap-1">
-                          {statusSummary.isDelayed ? (
+                          {po.isClosed ? (
+                            statusSummary.delayDays > 0 ? (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300 shadow-xs">
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
+                                COMPLETED (+{statusSummary.delayDays}d DELAY)
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-xs">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                COMPLETED (ON TIME)
+                              </span>
+                            )
+                          ) : statusSummary.isDelayed ? (
                             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-300 shadow-xs">
                               <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
                               DELAYED ({statusSummary.delayDays > 0 ? `+${statusSummary.delayDays}d` : ''})
@@ -224,9 +236,13 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
                             </span>
                           )}
                           <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
-                            statusSummary.isDelayed ? 'bg-amber-50 border-amber-200 text-amber-800 font-bold' : 'bg-slate-50 border-slate-200 text-slate-600'
+                            po.isClosed 
+                              ? (statusSummary.delayDays > 0 ? 'bg-amber-50 border-amber-200 text-amber-900 font-bold' : 'bg-slate-100 border-slate-200 text-slate-600 font-medium')
+                              : statusSummary.isDelayed ? 'bg-amber-50 border-amber-200 text-amber-800 font-bold' : 'bg-slate-50 border-slate-200 text-slate-600'
                           }`}>
-                            {statusSummary.isDelayed ? 'See Baseline for Delay Reason' : `Rev ${statusSummary.lastRevNum} Validated`}
+                            {po.isClosed 
+                              ? (statusSummary.delayDays > 0 ? `Completed by delay of ${statusSummary.delayDays} days` : 'Order Closed & Delivered On Time')
+                              : statusSummary.isDelayed ? 'See Baseline for Delay Reason' : `Rev ${statusSummary.lastRevNum} Validated`}
                           </span>
                         </div>
                       </td>

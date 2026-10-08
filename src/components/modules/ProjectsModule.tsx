@@ -145,22 +145,36 @@ export const ProjectsModule: React.FC<ProjectsModuleProps> = ({ onSelectPO }) =>
 
                   {/* Master Gantt Bar Rows */}
                   <div className="space-y-3.5 divide-y divide-slate-100">
-                    {masterMilestones.map((ms) => {
+                    {masterMilestones.map((ms, idx) => {
                       const isDelayed = ms.status === 'Delayed';
                       const isAtRisk = ms.status === 'At Risk';
                       const isCompleted = ms.status === 'Completed';
+
+                      const prevVariance = idx > 0 ? masterMilestones[idx - 1]?.varianceDays || 0 : 0;
+                      const currVariance = ms.varianceDays || 0;
+                      const stageDelta = currVariance - prevVariance;
 
                       return (
                         <div key={ms.id} className="pt-3 flex items-center justify-between gap-6 text-xs">
                           {/* Milestone Name & Status */}
                           <div className="w-64 shrink-0">
-                            <div className="flex items-center gap-1.5 font-bold text-slate-800">
-                              <span>{ms.stageOrder}. {ms.name}</span>
+                            <div className="flex items-center gap-1.5 font-bold text-slate-800 flex-wrap">
+                              <span>{ms.stageOrder}. {ms.name.replace(/^\d+\.\s*/, '')}</span>
+                              {stageDelta > 0 && (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                  +{stageDelta}d Delay
+                                </span>
+                              )}
+                              {stageDelta < 0 && (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  {stageDelta}d Recovered
+                                </span>
+                              )}
                             </div>
                             <div className="flex items-center gap-2 text-[10px] text-slate-500 font-mono mt-0.5">
                               <span>{ms.committedDurationDays}d baseline</span>
-                              <span className={`font-bold ${ms.varianceDays > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
-                                Var: {ms.varianceDays > 0 ? `+${ms.varianceDays}d` : `${ms.varianceDays}d`}
+                              <span className={`font-semibold ${ms.varianceDays > 0 ? 'text-rose-700' : ms.varianceDays < 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
+                                Net: {ms.varianceDays > 0 ? `+${ms.varianceDays}d` : `${ms.varianceDays}d`}
                               </span>
                             </div>
                           </div>
@@ -203,12 +217,17 @@ export const ProjectsModule: React.FC<ProjectsModuleProps> = ({ onSelectPO }) =>
                               </span>
                             ) : (
                               <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
-                                isDelayed ? 'bg-rose-50 border-rose-200 text-rose-800' :
+                                stageDelta > 0 ? 'bg-rose-50 border-rose-200 text-rose-800' :
                                 isAtRisk ? 'bg-amber-50 border-amber-200 text-amber-800' :
                                 ms.actualStartDate ? 'bg-blue-50 border-blue-200 text-blue-800' :
-                                'bg-slate-100 border-slate-200 text-slate-700'
+                                currVariance > 0 ? 'bg-slate-100 border-slate-200 text-slate-700' :
+                                'bg-slate-100 border-slate-200 text-slate-500'
                               }`}>
-                                {isDelayed ? 'Delayed' : isAtRisk ? 'At Risk' : ms.actualStartDate ? 'In Progress' : 'Pending'}
+                                {stageDelta > 0 ? `Delay (+${stageDelta}d)` :
+                                 isAtRisk ? 'At Risk' :
+                                 ms.actualStartDate ? (currVariance > 0 ? `In Progress (+${currVariance}d)` : 'In Progress') :
+                                 currVariance > 0 ? `Previous (+${currVariance}d)` :
+                                 'Pending'}
                               </span>
                             )}
                           </div>
@@ -236,31 +255,71 @@ export const ProjectsModule: React.FC<ProjectsModuleProps> = ({ onSelectPO }) =>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-slate-800">
-                      {masterMilestones.map((ms) => (
-                        <tr key={ms.id} className="hover:bg-slate-50">
-                          <td className="py-2.5 px-3 font-mono text-slate-400">{ms.stageOrder}</td>
-                          <td className="py-2.5 px-3 font-bold text-slate-900">{ms.name}</td>
-                          <td className="py-2.5 px-3 font-mono text-slate-600">{ms.committedBaselineStartDate}</td>
-                          <td className="py-2.5 px-3 font-mono text-slate-600">{ms.committedBaselineEndDate}</td>
-                          <td className="py-2.5 px-3 font-mono text-slate-800">{ms.actualStartDate || '-'}</td>
-                          <td className="py-2.5 px-3 font-mono text-emerald-800 font-bold">{ms.actualEndDate || ms.forecastEndDate}</td>
-                          <td className="py-2.5 px-3 text-center font-mono font-bold">
-                            <span className={ms.varianceDays > 0 ? 'text-rose-700' : ms.varianceDays < 0 ? 'text-emerald-700' : 'text-slate-500'}>
-                              {ms.varianceDays > 0 ? `+${ms.varianceDays}d` : `${ms.varianceDays}d`}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
-                              ms.status === 'Completed' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
-                              ms.status === 'Delayed' ? 'bg-rose-50 border-rose-200 text-rose-800' :
-                              ms.status === 'At Risk' ? 'bg-amber-50 border-amber-200 text-amber-800' :
-                              'bg-slate-100 border-slate-200 text-slate-700'
-                            }`}>
-                              {ms.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
+                      {masterMilestones.map((ms, idx) => {
+                        const prevVariance = idx > 0 ? masterMilestones[idx - 1]?.varianceDays || 0 : 0;
+                        const currVariance = ms.varianceDays || 0;
+                        const stageDelta = currVariance - prevVariance;
+                        const isCompleted = ms.status === 'Completed' || Boolean(ms.actualEndDate);
+                        const recoveredDays = isCompleted ? Math.max(0, prevVariance - currVariance) : 0;
+
+                        return (
+                          <tr key={ms.id} className="hover:bg-slate-50">
+                            <td className="py-2.5 px-3 font-mono text-slate-400">{ms.stageOrder}</td>
+                            <td className="py-2.5 px-3 font-bold text-slate-900">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span>{ms.name}</span>
+                                {stageDelta > 0 && (
+                                  <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                    +{stageDelta}d Delay
+                                  </span>
+                                )}
+                                {stageDelta < 0 && (
+                                  <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    {recoveredDays === 1 ? '1 day' : `${recoveredDays} days`} delay resolved
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-slate-600">{ms.committedBaselineStartDate}</td>
+                            <td className="py-2.5 px-3 font-mono text-slate-600">{ms.committedBaselineEndDate}</td>
+                            <td className="py-2.5 px-3 font-mono text-slate-800">{ms.actualStartDate || '-'}</td>
+                            <td className="py-2.5 px-3 font-mono text-emerald-800 font-bold">{ms.actualEndDate || ms.forecastEndDate}</td>
+                            <td className="py-2.5 px-3 text-center font-mono font-bold">
+                              <span className={ms.varianceDays > 0 ? 'text-rose-700' : ms.varianceDays < 0 ? 'text-emerald-700' : 'text-slate-500'}>
+                                {ms.varianceDays > 0 ? `+${ms.varianceDays}d` : `${ms.varianceDays}d`}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
+                                ms.status === 'Completed'
+                                  ? (stageDelta > 0
+                                      ? 'bg-rose-50 border-rose-200 text-rose-800'
+                                      : currVariance > 0
+                                      ? 'bg-amber-50 border-amber-200 text-amber-800'
+                                      : recoveredDays > 0
+                                      ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                                      : 'bg-emerald-50 border-emerald-200 text-emerald-800')
+                                  : stageDelta > 0 ? 'bg-rose-50 border-rose-200 text-rose-800' :
+                                ms.status === 'At Risk' ? 'bg-amber-50 border-amber-200 text-amber-800' :
+                                ms.varianceDays > 0 ? 'bg-slate-100 border-slate-200 text-slate-700' :
+                                'bg-slate-100 border-slate-200 text-slate-700'
+                              }`}>
+                                {ms.status === 'Completed'
+                                  ? (stageDelta > 0
+                                      ? `Completed (+${stageDelta}d delay added)`
+                                      : currVariance > 0
+                                      ? (recoveredDays > 0 
+                                          ? `Completed (${recoveredDays === 1 ? '1 day' : `${recoveredDays} days`} delay resolved, Previous: +${currVariance}d)` 
+                                          : `Completed (Previous: +${currVariance}d)`)
+                                      : recoveredDays > 0
+                                      ? `Completed (${recoveredDays === 1 ? '1 day' : `${recoveredDays} days`} delay resolved)`
+                                      : 'Completed')
+                                  : stageDelta > 0 ? `Delay (+${stageDelta}d)` : ms.varianceDays > 0 ? `Previous (+${ms.varianceDays}d)` : ms.status}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -302,7 +361,7 @@ export const ProjectsModule: React.FC<ProjectsModuleProps> = ({ onSelectPO }) =>
                           </td>
                           <td className="py-3 px-4 text-center font-mono font-bold">{line.qty} Pcs</td>
                           <td className="py-3 px-4 font-medium text-slate-800">
-                            {activeMs ? `${activeMs.stageOrder}. ${activeMs.name}` : 'Completed'}
+                            {activeMs ? `${activeMs.stageOrder}. ${activeMs.name.replace(/^\d+\.\s*/, '')}` : 'Completed'}
                           </td>
                           <td className="py-3 px-4 text-center font-mono font-bold">
                             <span className={line.overallVarianceDays > 0 ? 'text-rose-700' : 'text-emerald-700'}>

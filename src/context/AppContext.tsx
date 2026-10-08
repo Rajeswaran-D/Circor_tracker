@@ -34,7 +34,8 @@ import {
   normalizeMaterialDates,
   resolveLineMaterials,
   buildTemplateSchedule,
-  getOrderDeliveryDate
+  getOrderDeliveryDate,
+  getDaysDifference
 } from '../services/calculationEngine';
 import { getSharedStateEndpoint, getStorageConfig, STORAGE_KEYS, type StorageKey } from '../services/storageContract';
 
@@ -195,8 +196,8 @@ const saveSharedState = (key: string, value: unknown) => {
 };
 const getPurchaseOrderStatus = (productLines: PurchaseOrder['productLines'], isClosed = false): PurchaseOrder['status'] => {
   if (isClosed) return 'Closed';
-  if (productLines.length > 0 && productLines.every(line => line.status === 'Completed')) return 'Completed';
-  if (productLines.some(line => line.status === 'Delayed')) return 'Delayed';
+  if (productLines.length > 0 && productLines.every(line => (line.milestones || []).length > 0 && line.status === 'Completed')) return 'Completed';
+  if (productLines.some(line => line.status === 'Delayed' || (line.overallVarianceDays || 0) > 0)) return 'Delayed';
   if (productLines.some(line => line.status === 'At Risk')) return 'At Risk';
   return 'In Progress';
 };
@@ -727,26 +728,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const prevEnd = prevMs.actualEndDate || prevMs.forecastEndDate || completionDate;
 
       if (i === completedIndex + 1) {
-        // The immediate next milestone: set its start date to the completion date
+        // The immediate next milestone:
+        // Do not force start date before committed baseline start date if previous milestone ended early
+        const bStart = ms.committedBaselineStartDate;
+        const bEnd = ms.committedBaselineEndDate;
         const newStartDate = ms.actualStartDate
           ? (ms.actualStartDate < prevEnd ? prevEnd : ms.actualStartDate)
-          : prevEnd;
+          : (bStart && prevEnd < bStart ? bStart : prevEnd);
+        const startShift = (bStart && newStartDate > bStart) ? getDaysDifference(bStart, newStartDate) : 0;
         result[i] = {
           ...ms,
           actualStartDate: ms.status === 'In Progress' ? newStartDate : ms.actualStartDate,
           forecastStartDate: newStartDate,
-          forecastEndDate: ms.actualEndDate || addDays(newStartDate, ms.committedDurationDays),
+          forecastEndDate: ms.actualEndDate || (
+            startShift > 0 && bEnd
+              ? addDays(bEnd, startShift)
+              : (bEnd || addDays(newStartDate, ms.committedDurationDays))
+          ),
           lastUpdatedBy: user,
           lastUpdatedAt: new Date().toISOString()
         };
       } else {
         // Subsequent milestones: cascade forecast dates
         const prevResult = result[i - 1];
-        const cascadeStart = prevResult.forecastEndDate || prevResult.committedBaselineEndDate;
+        const bStart = ms.committedBaselineStartDate;
+        const bEnd = ms.committedBaselineEndDate;
+        const prevEnd = prevResult.forecastEndDate || prevResult.committedBaselineEndDate;
+        const cascadeStart = (bStart && prevEnd && prevEnd <= bStart) ? bStart : (prevEnd || bStart);
+        const startShift = (bStart && cascadeStart && cascadeStart > bStart) ? getDaysDifference(bStart, cascadeStart) : 0;
+        const cascadeEnd = ms.actualEndDate || (
+          startShift > 0 && bEnd
+            ? addDays(bEnd, startShift)
+            : (bEnd || (cascadeStart ? addDays(cascadeStart, ms.committedDurationDays) : ''))
+        );
         result[i] = {
           ...ms,
           forecastStartDate: cascadeStart,
-          forecastEndDate: ms.actualEndDate || addDays(cascadeStart, ms.committedDurationDays)
+          forecastEndDate: cascadeEnd
         };
       }
     }
@@ -791,14 +809,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const ms = line.milestones.find(m => m.key === item.milestoneKey);
       if (!ms) return { success: false, error: 'Milestone not found' };
 
-      const isDelayedDate = item.eventType === 'start'
-        ? item.eventDate > ms.committedBaselineStartDate
-        : item.eventDate > ms.committedBaselineEndDate;
-      if (isDelayedDate && !item.delayReason?.trim()) {
-        return { success: false, error: `A delay reason is required for ${line.productName} when the date is later than the baseline.` };
+      const currentMsIndex = line.milestones.findIndex(m => m.key === item.milestoneKey);
+      const prevMs = currentMsIndex > 0 ? line.milestones[currentMsIndex - 1] : null;
+      const prevActualEnd = prevMs?.actualEndDate || prevMs?.forecastEndDate;
+      const duration = Math.max(1, ms.committedDurationDays || 1);
+
+      const baselineStart = ms.committedBaselineStartDate;
+      const baselineEnd = ms.committedBaselineEndDate;
+
+      let isNewDelayCausedByStage = false;
+      let newDelayDays = 0;
+      let revisedTargetLimit = '';
+
+      if (item.eventType === 'start') {
+        const totalDelay = (baselineStart && item.eventDate > baselineStart)
+          ? getDaysDifference(baselineStart, item.eventDate)
+          : 0;
+        const inheritedDelay = (baselineStart && prevActualEnd && prevActualEnd > baselineStart)
+          ? Math.min(totalDelay, getDaysDifference(baselineStart, prevActualEnd))
+          : 0;
+        newDelayDays = Math.max(0, totalDelay - inheritedDelay);
+        isNewDelayCausedByStage = newDelayDays > 0;
+        revisedTargetLimit = (baselineStart && prevActualEnd && prevActualEnd > baselineStart)
+          ? prevActualEnd
+          : (baselineStart || '');
+      } else {
+        const totalDelay = (baselineEnd && item.eventDate > baselineEnd)
+          ? getDaysDifference(baselineEnd, item.eventDate)
+          : 0;
+        const effectiveStart = ms.actualStartDate || ((baselineStart && prevActualEnd && prevActualEnd > baselineStart) ? prevActualEnd : baselineStart);
+        const startDelay = (baselineStart && effectiveStart && effectiveStart > baselineStart)
+          ? getDaysDifference(baselineStart, effectiveStart)
+          : 0;
+        const inheritedDelay = Math.min(totalDelay, startDelay);
+        newDelayDays = Math.max(0, totalDelay - inheritedDelay);
+        isNewDelayCausedByStage = newDelayDays > 0;
+
+        const baselineDuration = (baselineStart && baselineEnd) ? Math.max(1, getDaysDifference(baselineStart, baselineEnd)) : duration;
+        revisedTargetLimit = startDelay > 0 && effectiveStart ? addDays(effectiveStart, baselineDuration) : (baselineEnd || '');
       }
 
-      const currentMsIndex = line.milestones.findIndex(m => m.key === item.milestoneKey);
+      if (isNewDelayCausedByStage && !item.delayReason?.trim()) {
+        return { 
+          success: false, 
+          error: `A delay reason is required for ${line.productName} (Stage ${ms.stageOrder}: ${ms.name.replace(/^\d+\.\s*/, '')}) because the date entered (${item.eventDate}) adds +${newDelayDays}d new delay beyond its scheduled plan (${revisedTargetLimit}).` 
+        };
+      }
+
       const activeMsIndex = line.milestones.findIndex(m => m.status !== 'Completed' && !m.actualEndDate && m.completionPct !== 100);
       if (item.eventType === 'start' && (ms.status === 'Completed' || Boolean(ms.actualEndDate) || ms.completionPct === 100)) {
         return { success: false, error: `Milestone '${ms.name}' on ${line.productName} is already completed.` };
@@ -897,7 +954,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (item.ecnNo) newMs.ecnNumber = item.ecnNo;
           if (item.delayCategory) newMs.delayCategory = item.delayCategory;
           if (item.delayOwner) newMs.delayOwner = item.delayOwner;
-          if (item.delayReason) newMs.delayReason = item.delayReason;
+          if (item.delayReason && !item.delayReason.startsWith('Inherited') && !item.delayReason.startsWith('Cascaded')) {
+            newMs.delayReason = item.delayReason;
+          }
 
           newMs.lastUpdatedBy = item.user;
           newMs.lastUpdatedAt = new Date().toISOString();
@@ -917,10 +976,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return recalculateProductLine(tempLine, todayStr, config.atRiskThresholdDays, config.delayedThresholdDays);
       });
 
+      const maxFinalForecast = updatedLines.reduce((latest, l) => {
+        const lastMs = (l.milestones || []).slice(-1)[0];
+        const end = lastMs?.actualEndDate || lastMs?.forecastEndDate || lastMs?.committedBaselineEndDate;
+        if (!latest) return end || '';
+        return end && end > latest ? end : latest;
+      }, '');
+
+      const poStatus = getPurchaseOrderStatus(updatedLines, p.isClosed);
+
       return {
         ...p,
-        status: getPurchaseOrderStatus(updatedLines, p.isClosed),
+        status: poStatus,
         productLines: updatedLines,
+        revisedDeliveryDate: (maxFinalForecast && maxFinalForecast > p.committedDeliveryDate) ? maxFinalForecast : p.committedDeliveryDate,
         lastUpdatedBy: itemsForPO[0]?.user || activeRole,
         lastUpdatedAt: new Date().toISOString()
       };
@@ -1126,10 +1195,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return recalculated;
       });
 
+      const maxFinalForecast = updatedLines.reduce((latest, l) => {
+        const lastMs = (l.milestones || []).slice(-1)[0];
+        const end = lastMs?.actualEndDate || lastMs?.forecastEndDate || lastMs?.committedBaselineEndDate;
+        if (!latest) return end || '';
+        return end && end > latest ? end : latest;
+      }, '');
+
       return {
         ...p,
         status: getPurchaseOrderStatus(updatedLines, p.isClosed),
         productLines: updatedLines,
+        revisedDeliveryDate: (maxFinalForecast && maxFinalForecast > p.committedDeliveryDate) ? maxFinalForecast : p.committedDeliveryDate,
         lastUpdatedBy: user,
         lastUpdatedAt: new Date().toISOString()
       };
@@ -1286,7 +1363,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       milestones: { key: string; name: string; durationDays: number }[];
     }[];
   }) => {
-    if (activeRole !== 'Project Manager (PM Baseline)') {
+    if (activeRole !== 'Project Manager (PM Baseline)' && activeRole !== 'Project Management') {
       return { success: false, error: 'Only the Project Manager (PM Baseline) role can approve or edit the baseline.' };
     }
     const todayStr = todayLocal();

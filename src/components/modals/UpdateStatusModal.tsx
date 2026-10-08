@@ -4,7 +4,7 @@ import type { PurchaseOrder } from '../../types';
 import { ROLE_PERMISSIONS } from '../../types';
 import { X, Wrench, CheckCircle2, Play, Save, AlertTriangle } from 'lucide-react';
 import { getPOManufacturingStatus } from '../../utils/statusUtils';
-import { clampDateMax, todayLocal, getDaysDifference, mergeDelayReason } from '../../services/calculationEngine';
+import { clampDateMax, todayLocal, getDaysDifference, addDays } from '../../services/calculationEngine';
 
 interface UpdateStatusModalProps {
   isOpen: boolean;
@@ -100,7 +100,7 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
   const stageNames = new Map(rawStages.map(stage => [stage.key, stage.name]));
   const allStages = milestones.map(ms => ({
     key: ms.key,
-    name: stageNames.get(ms.key) || `${ms.stageOrder}. ${ms.name}`
+    name: stageNames.get(ms.key) || `${ms.stageOrder}. ${ms.name.replace(/^\d+\.\s*/, '')}`
   }));
 
   // Slot users can only see/act on their own milestone; PM can see all.
@@ -124,7 +124,7 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
     || (previousMs ? (previousMs.forecastEndDate || previousMs.committedBaselineEndDate) : undefined);
   const currentMs = milestones[selectedMsIndex];
   const currentMsStart = currentMs
-    ? (currentMs.actualStartDate || previousMsEnd || currentMs.forecastStartDate || currentMs.committedBaselineStartDate)
+    ? (currentMs.actualStartDate || previousMsActualEnd)
     : undefined;
 
   // Date-picker range. The floor must NEVER exceed max (today) or the picker
@@ -325,6 +325,40 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
             </div>
           )}
 
+          {/* Milestone Schedule Info (Planned days & Revised Target dates) */}
+          {currentMs && (() => {
+            const bStart = currentMs.committedBaselineStartDate || po.poDate;
+            const bEnd = currentMs.committedBaselineEndDate || po.committedDeliveryDate;
+            const dur = Math.max(1, currentMs.committedDurationDays || 1);
+            const planDuration = (bStart && bEnd) ? Math.max(1, getDaysDifference(bStart, bEnd)) : dur;
+
+            const prevEffectiveEnd = previousMs ? (previousMs.actualEndDate || previousMs.forecastEndDate) : undefined;
+            const revStart = currentMs.actualStartDate || ((bStart && prevEffectiveEnd && prevEffectiveEnd > bStart) ? prevEffectiveEnd : bStart);
+            const startShift = (bStart && revStart && revStart > bStart) ? getDaysDifference(bStart, revStart) : 0;
+            const revEnd = startShift > 0 && revStart ? addDays(revStart, planDuration) : bEnd;
+
+            return (
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 text-xs font-mono">
+                <div className="flex items-center justify-between text-slate-700">
+                  <span>Planned Baseline: <strong className="text-slate-900">{bStart} &rarr; {bEnd}</strong></span>
+                  <span className="font-bold text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200 text-[10px]">
+                    {planDuration} days planned
+                  </span>
+                </div>
+                <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
+                  <span className={startShift > 0 ? "text-amber-800" : "text-emerald-700"}>
+                    Revised Target: <strong className={startShift > 0 ? "text-amber-950" : "text-emerald-900"}>{revStart} &rarr; {revEnd}</strong>
+                  </span>
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+                    startShift > 0 ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-emerald-50 text-emerald-800 border-emerald-200"
+                  }`}>
+                    {startShift > 0 ? `+${startShift}d shift from previous delay` : 'On original baseline'}
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Event Date */}
           <div className="space-y-1.5">
             <label className="font-bold text-slate-900 flex items-center justify-between">
@@ -371,81 +405,132 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
             </div>
           </div>
 
-          {/* Optional Delay Reason Field - Only shown when this specific action or completion date exceeds baseline */}
-          {currentMs && Boolean(currentMs.committedBaselineEndDate && completionDate > currentMs.committedBaselineEndDate) && (
-            <div className="space-y-2 p-3.5 bg-amber-50/80 border border-amber-300 rounded-xl">
-              {(() => {
-                const prevEffectiveEnd = previousMs ? (previousMs.actualEndDate || previousMs.forecastEndDate) : undefined;
-                const prevBaselineEnd = previousMs?.committedBaselineEndDate;
-                const netInheritedDelay = prevEffectiveEnd && prevBaselineEnd
-                  ? Math.max(0, getDaysDifference(prevBaselineEnd, prevEffectiveEnd))
-                  : (previousMs && typeof previousMs.varianceDays === 'number' && previousMs.varianceDays > 0 ? previousMs.varianceDays : 0);
+          {/* Delay Reason Field - Clearly distinguishing new stage delays vs inherited delays */}
+          {currentMs && Boolean(
+            (statusAction === 'In Progress' && currentMs.committedBaselineStartDate && completionDate > currentMs.committedBaselineStartDate) ||
+            (statusAction !== 'In Progress' && currentMs.committedBaselineEndDate && completionDate > currentMs.committedBaselineEndDate)
+          ) && (
+            (() => {
+              const prevEffectiveEnd = previousMs ? (previousMs.actualEndDate || previousMs.forecastEndDate) : undefined;
+              const baselineStart = currentMs.committedBaselineStartDate;
+              const baselineEnd = currentMs.committedBaselineEndDate;
 
-                const prevMilestones = milestones.slice(0, selectedMsIndex);
-                const prevDelaysList = prevMilestones
-                  .map(m => {
-                    let days = 0;
-                    if (m.actualEndDate && m.committedBaselineEndDate) {
-                      days = Math.max(0, getDaysDifference(m.committedBaselineEndDate, m.actualEndDate));
-                    } else if (typeof m.varianceDays === 'number' && m.varianceDays > 0) {
-                      days = m.varianceDays;
-                    }
-                    return { ...m, calculatedDelayDays: days };
-                  })
-                  .filter(m => m.calculatedDelayDays > 0 || (Boolean(m.delayReason) && !m.delayReason?.startsWith('Cascaded') && !m.delayReason?.startsWith('Inherited')));
+              let totalDelay = 0;
+              let netInheritedDelay = 0;
+              let newDelayFormed = 0;
 
+              if (statusAction === 'In Progress') {
+                totalDelay = (baselineStart && completionDate > baselineStart)
+                  ? getDaysDifference(baselineStart, completionDate)
+                  : 0;
+                netInheritedDelay = (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart)
+                  ? Math.min(totalDelay, getDaysDifference(baselineStart, prevEffectiveEnd))
+                  : 0;
+                newDelayFormed = Math.max(0, totalDelay - netInheritedDelay);
+              } else {
+                totalDelay = (baselineEnd && completionDate > baselineEnd)
+                  ? getDaysDifference(baselineEnd, completionDate)
+                  : 0;
+                const effectiveStart = currentMs.actualStartDate || ((baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart) ? prevEffectiveEnd : baselineStart);
+                const startDelay = (baselineStart && effectiveStart && effectiveStart > baselineStart)
+                  ? getDaysDifference(baselineStart, effectiveStart)
+                  : 0;
+                netInheritedDelay = Math.min(totalDelay, startDelay);
+                newDelayFormed = Math.max(0, totalDelay - netInheritedDelay);
+              }
+
+              const prevMilestones = milestones.slice(0, selectedMsIndex);
+              const prevDelaysList = prevMilestones
+                .map((m, mIdx) => {
+                  const prevM = mIdx > 0 ? prevMilestones[mIdx - 1] : null;
+                  const currVar = Math.max(0, typeof m.varianceDays === 'number' ? m.varianceDays : 0);
+                  const prevVar = prevM ? Math.max(0, typeof prevM.varianceDays === 'number' ? prevM.varianceDays : 0) : 0;
+                  const stageDelta = currVar - prevVar;
+                  return { ...m, calculatedDelayDays: stageDelta };
+                })
+                .filter(m => m.calculatedDelayDays > 0);
+
+              if (newDelayFormed > 0) {
                 return (
-                  <>
+                  <div className="space-y-2 p-3.5 bg-rose-50/90 border border-rose-300 rounded-xl">
                     <div className="flex items-center justify-between">
-                      <label className="font-bold text-amber-900 text-xs flex items-center gap-1.5">
-                        <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
-                        Actual Reason for Delay
+                      <label className="font-bold text-rose-950 text-xs flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                        <span>New Delay Formed on Stage {currentMs.stageOrder}: <strong className="text-rose-700 font-mono">+{newDelayFormed}d Added</strong></span>
                       </label>
-                      <div className="flex items-center gap-1.5">
-                        {netInheritedDelay > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const breakdown = prevDelaysList.map(m => `${m.name} (+${m.calculatedDelayDays}d${m.delayReason ? `: ${m.delayReason}` : ''})`).join('; ');
-                              const sum = `Inherited delay from preceding stages (+${netInheritedDelay}d)${breakdown ? ` [${breakdown}]` : ''}`;
-                              setDelayReasonInput(prev => mergeDelayReason(prev, sum));
-                            }}
-                            className="text-[10px] text-emerald-900 bg-white hover:bg-emerald-50 border border-emerald-300 font-bold px-2 py-0.5 rounded cursor-pointer shadow-2xs"
-                          >
-                            Append Previous Delays (+{netInheritedDelay}d)
-                          </button>
-                        )}
-                        {previousMs && (
-                          <button
-                            type="button"
-                            onClick={() => setDelayReasonInput(`Delay cascaded from previous stage: ${previousMs.name}${previousMs.delayReason ? ` (${previousMs.delayReason})` : ''}`)}
-                            className="text-[10px] text-slate-700 hover:text-slate-900 underline font-medium cursor-pointer"
-                          >
-                            Preceding Stage
-                          </button>
-                        )}
-                      </div>
+                      {netInheritedDelay > 0 && (
+                        <span className="text-[10px] font-mono text-slate-500">
+                          (+{netInheritedDelay}d prior inherited)
+                        </span>
+                      )}
                     </div>
 
                     {netInheritedDelay > 0 && prevDelaysList.length > 0 && (
-                      <div className="p-2 bg-amber-100/60 border border-amber-200 rounded-lg space-y-0.5 text-[10px] font-mono text-amber-900">
-                        <div className="font-bold text-amber-950">Preceding Stage Delays:</div>
+                      <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg space-y-0.5 text-[10px] font-mono text-amber-900">
+                        <div className="font-bold text-amber-950">Preceding Delay Sources:</div>
                         {prevDelaysList.map((m, i) => (
-                          <div key={i} className="truncate">• Stage {m.stageOrder}. {m.name}: <strong className="text-rose-700">+{m.calculatedDelayDays}d</strong> {m.delayReason ? `("${m.delayReason}")` : m.delayCategory ? `(${m.delayCategory})` : ''}</div>
+                          <div key={i} className="truncate">
+                            • Stage {m.stageOrder}: {m.name.replace(/^\d+\.\s*/, '')}: <strong className="text-rose-700">+{m.calculatedDelayDays}d Delay Added</strong>
+                            {m.delayReason && <span className="text-slate-600 font-normal"> — {m.delayReason}</span>}
+                          </div>
                         ))}
+                        <div className="pt-0.5 font-bold text-amber-950 border-t border-amber-200/60 flex justify-between">
+                          <span>Total Cumulative Delay:</span>
+                          <span className="text-rose-700 font-bold">+{totalDelay}d</span>
+                        </div>
                       </div>
                     )}
-                  </>
+
+                    <input
+                      type="text"
+                      placeholder={`Reason for +${newDelayFormed}d delay formed on Stage ${currentMs.stageOrder} *`}
+                      value={delayReasonInput}
+                      onChange={(e) => setDelayReasonInput(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-rose-300 rounded-lg text-xs text-slate-900 font-bold focus:outline-none focus:border-rose-600 placeholder:font-normal placeholder:text-rose-400"
+                      required
+                    />
+                  </div>
                 );
-              })()}
-              <input
-                type="text"
-                placeholder="Explain reason for delay (e.g. Casting supplier delay / Hydrostatic re-inspection)..."
-                value={delayReasonInput}
-                onChange={(e) => setDelayReasonInput(e.target.value)}
-                className="w-full px-3 py-2 bg-white border border-amber-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:border-amber-600 font-medium placeholder:text-slate-400"
-              />
-            </div>
+              }
+
+              return (
+                <div className="space-y-2 p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl">
+                  <div className="flex items-center justify-between">
+                    <div className="font-bold text-blue-950 text-xs flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Preceding Delay: <strong className="text-rose-700 font-mono">+{netInheritedDelay}d Inherited</strong> (No new delay caused by Stage {currentMs.stageOrder})</span>
+                    </div>
+                    <span className="text-[10px] font-mono font-bold text-blue-800 bg-white px-2 py-0.5 rounded border border-blue-300">
+                      Total Delay: +{totalDelay}d
+                    </span>
+                  </div>
+
+                  {prevDelaysList.length > 0 && (
+                    <div className="p-2 bg-blue-100/60 border border-blue-200 rounded-lg space-y-0.5 text-[10px] font-mono text-blue-900">
+                      <div className="font-bold text-blue-950">Preceding Delay Sources:</div>
+                      {prevDelaysList.map((m, i) => (
+                        <div key={i} className="truncate">
+                          • Stage {m.stageOrder}: {m.name.replace(/^\d+\.\s*/, '')}: <strong className="text-rose-700">+{m.calculatedDelayDays}d Delay Added</strong>
+                          {m.delayReason && <span className="text-slate-600 font-normal"> — {m.delayReason}</span>}
+                        </div>
+                      ))}
+                      <div className="pt-0.5 font-bold text-blue-950 border-t border-blue-200/60 flex justify-between">
+                        <span>Total Cumulative Delay:</span>
+                        <span className="text-rose-700 font-bold">+{totalDelay}d</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <input
+                    type="text"
+                    placeholder="Optional remarks or notes..."
+                    value={delayReasonInput}
+                    onChange={(e) => setDelayReasonInput(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-blue-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:border-blue-600 font-medium placeholder:text-slate-400"
+                  />
+                </div>
+              );
+            })()
           )}
 
           {/* Work Description / Notes */}
