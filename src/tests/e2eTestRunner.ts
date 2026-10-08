@@ -284,16 +284,19 @@ assert(priorDelays.length === 2, `Collected ${priorDelays.length} prior delayed 
 const delaySummaryString = `Accumulated previous delays: ` + priorDelays.map(d => `${d.name} (+${d.varianceDays}d${d.delayReason ? `: ${d.delayReason}` : ''})`).join('; ');
 assert(delaySummaryString.includes('PM Baseline (+4d') && delaySummaryString.includes('CORB Release (+2d'), 'Delay summary properly formats multi-stage historical delay text');
 
-// Test early completion recovery: if Stage 4 completes ahead of its baseline, line variance is recovered
+// Test early completion recovery: Stage 4 starts on 08-15 (6d behind plan) and is completed the
+// same day. A stage can never end before it starts, so the engine keeps the end at 08-15 (5d
+// shorter than its 5d plan) and the line recovers from +6d to a net +1d at WO Release.
 line1.milestones[3].actualStartDate = '2026-08-15';
-line1.milestones[3].actualEndDate = line1.milestones[3].committedBaselineEndDate; // Completed exactly on baseline
+line1.milestones[3].actualEndDate = '2026-08-15';
 line1.milestones[3].status = 'Completed';
 line1.milestones[3].completionPct = 100;
 line1.milestones[3].varianceDays = 0;
 
 const recoveredLine = recalculateProductLine(line1, '2026-10-05', 2, 5);
-assert(recoveredLine.overallVarianceDays === 0, `Line overall variance accurately tallied to 0d after early completion recovered schedule (got ${recoveredLine.overallVarianceDays}d)`);
-assert(recoveredLine.status === 'On Track' || recoveredLine.status === 'In Progress' || recoveredLine.status === 'Not Started', `Line status recovered to active progress (got ${recoveredLine.status})`);
+assert(recoveredLine.overallVarianceDays === 1, `Line overall variance recovers from +6d to +1d after Stage 4 completes quickly (got ${recoveredLine.overallVarianceDays}d)`);
+assert(recoveredLine.overallVarianceDays < 6, 'Early completion of Stage 4 reduces the accumulated delay');
+assert(recoveredLine.status === 'Delayed', `Line stays Delayed while a +1d variance remains (got ${recoveredLine.status})`);
 
 // ----------------------------------------------------------------------------
 // TEST GROUP 5: Multi-Product Weighted Progress Calculation
@@ -355,5 +358,7 @@ const poStatusAfterFullCompletion = getPOManufacturingStatus(po);
 assert(poStatusAfterFullCompletion.completedStagesCount >= 14, 'getPOManufacturingStatus reports 100% stage completion');
 
 console.log('\n================================================================');
-console.log(`🎉 TEST SUMMARY: ${passedTests}/${totalTests} TESTS PASSED (100% SUCCESS RATE)`);
+const successRate = totalTests === 0 ? 0 : Math.round((passedTests / totalTests) * 100);
+console.log(`${passedTests === totalTests ? '🎉' : '⚠️'} TEST SUMMARY: ${passedTests}/${totalTests} TESTS PASSED (${successRate}% SUCCESS RATE)`);
 console.log('================================================================\n');
+if (passedTests !== totalTests) throw new Error(`${totalTests - passedTests} e2e test(s) failed`);
