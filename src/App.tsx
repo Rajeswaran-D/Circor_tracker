@@ -12,7 +12,6 @@ import { CancelOrderModal } from "./components/modals/CancelOrderModal";
 import { DashboardModule } from "./components/modules/DashboardModule";
 import { OrderIntakeModule } from "./components/modules/OrderIntakeModule";
 import { ProductCatalogModule } from "./components/modules/ProductCatalogModule";
-import { DeliveryDispatchModule } from "./components/modules/DeliveryDispatchModule";
 import { MilestoneModuleView } from "./components/modules/MilestoneModuleView";
 import { BaselinePlanningModule } from "./components/modules/BaselinePlanningModule";
 import { AdministrationModule } from "./components/modules/AdministrationModule";
@@ -162,7 +161,13 @@ const MainAppContent: React.FC = () => {
             <MilestoneModuleView stageKey="trn" stageTitle="13. TRN" stageOrder={13} responsibleRole="QC (TRN)" description="Issue Test & Release Note (TRN), QA final release dossier, and shipping clearance certificates." />
           )}
           {activeModule === "14. Final Shipment & Dispatch" && (
-            <DeliveryDispatchModule onOpenManualInput={handleOpenManualInput} />
+            <MilestoneModuleView 
+              stageKey="shipment" 
+              stageTitle="14. Final Shipment & Dispatch" 
+              stageOrder={14} 
+              responsibleRole="Stores (Shipment)" 
+              description="Track packing clearance, customs dispatch, site delivery confirmation, and complete order shipments." 
+            />
           )}
           {activeModule === "Product Catalog" && <ProductCatalogModule />}
         </main>

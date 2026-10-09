@@ -17,7 +17,7 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
   const [statusFilter, setStatusFilter] = useState<"active" | "all" | "completed">("active");
   const [successMsg, setSuccessMsg] = useState("");
 
-  const deliveryKeys = ["shipment", "dispatch", "delivery", "trn"];
+  const deliveryKeys = ["shipment", "dispatch", "delivery"];
 
   const handleClose = (poId: string) => {
     const notesToUse = closureNotes.trim() || "Order completed and delivered — closed by operator.";
@@ -30,11 +30,23 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
 
   const canManageStage = isMilestoneOwnedByRole('shipment', activeRole);
 
+  const isPOReadyForDispatch = (po: PurchaseOrder) => {
+    return (po.productLines || []).some(line => {
+      const shipMs = (line.milestones || []).find(m => deliveryKeys.includes(m.key));
+      if (!shipMs) return false;
+      const msIdx = (line.milestones || []).findIndex(m => m.id === shipMs.id || m.key === shipMs.key);
+      const prevMs = msIdx > 0 ? line.milestones[msIdx - 1] : null;
+      const isPrereqDone = !prevMs || prevMs.status === 'Completed' || Boolean(prevMs.actualEndDate) || prevMs.completionPct === 100;
+      const isDone = shipMs.status === 'Completed' || Boolean(shipMs.actualEndDate) || shipMs.completionPct === 100;
+      return isPrereqDone && !isDone;
+    });
+  };
+
   const filteredOrders = purchaseOrders
-    .filter(po => po.status !== "Baseline Pending")
+    .filter(po => po.status !== "Baseline Pending" && po.status !== "Cancelled" && !po.isCancelled)
     .filter(po => {
       if (statusFilter === "active") {
-        return !po.isClosed && po.status !== "Completed";
+        return !po.isClosed && po.status !== "Completed" && isPOReadyForDispatch(po);
       }
       if (statusFilter === "completed") {
         return po.isClosed || po.status === "Completed";
@@ -42,8 +54,8 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
       return true;
     });
 
-  const activeCount = purchaseOrders.filter(po => po.status !== "Baseline Pending" && !po.isClosed && po.status !== "Completed").length;
-  const completedCount = purchaseOrders.filter(po => po.status !== "Baseline Pending" && (po.isClosed || po.status === "Completed")).length;
+  const activeCount = purchaseOrders.filter(po => po.status !== "Baseline Pending" && po.status !== "Cancelled" && !po.isCancelled && !po.isClosed && po.status !== "Completed" && isPOReadyForDispatch(po)).length;
+  const completedCount = purchaseOrders.filter(po => po.status !== "Baseline Pending" && po.status !== "Cancelled" && !po.isCancelled && (po.isClosed || po.status === "Completed")).length;
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">

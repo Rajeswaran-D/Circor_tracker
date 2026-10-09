@@ -211,24 +211,26 @@ export const OrderIntakeModule: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 shrink-0">
-          <button
-            onClick={downloadCsvTemplate}
-            className="flex items-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold border border-white/20 shadow-xs transition-all cursor-pointer"
-            title="Download standardized CSV import template"
-          >
-            <Download className="w-4 h-4 text-emerald-300" />
-            Download Template (.csv)
-          </button>
-          <button
-            onClick={() => setShowBulkImportModal(true)}
-            className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-md transition-all cursor-pointer border border-emerald-400/40"
-            title="Bulk import orders and milestone dates from Excel/CSV"
-          >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-100" />
-            Bulk Import (CSV / Excel)
-          </button>
-        </div>
+        {canCreatePO && (
+          <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              onClick={downloadCsvTemplate}
+              className="flex items-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold border border-white/20 shadow-xs transition-all cursor-pointer"
+              title="Download standardized CSV import template"
+            >
+              <Download className="w-4 h-4 text-emerald-300" />
+              Download Template (.csv)
+            </button>
+            <button
+              onClick={() => setShowBulkImportModal(true)}
+              className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-md transition-all cursor-pointer border border-emerald-400/40"
+              title="Bulk import orders and milestone dates from Excel/CSV"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-100" />
+              Bulk Import (CSV / Excel)
+            </button>
+          </div>
+        )}
       </div>
 
       {!canCreatePO && (

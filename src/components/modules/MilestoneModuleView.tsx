@@ -201,12 +201,12 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
     };
   }).filter(group => group.totalLines > 0);
 
-  // Overall KPI statistics
-  const activePOGroups = poStageGroups.filter(g => !g.isAllCompleted && !g.po.isClosed && g.po.status !== 'Completed');
+  // Overall KPI statistics (filtered to active orders that have reached and are ready/active on this stage)
+  const activePOGroups = poStageGroups.filter(g => !g.isAllCompleted && !g.po.isClosed && g.po.status !== 'Completed' && g.hasActiveWork);
   const completedPOGroups = poStageGroups.filter(g => g.isAllCompleted || g.po.isClosed || g.po.status === 'Completed');
 
   const totalStagePOs = activePOGroups.length;
-  const totalStageLines = activePOGroups.reduce((acc, g) => acc + g.totalLines, 0);
+  const totalStageLines = activePOGroups.reduce((acc, g) => acc + (g.readyToStartLines + g.startedLines), 0);
   const totalCompletedLines = poStageGroups.reduce((acc, g) => acc + g.completedLines, 0);
   const totalStartedLines = activePOGroups.reduce((acc, g) => acc + g.startedLines, 0);
   const totalDelayedLines = activePOGroups.reduce((acc, g) => acc + g.delayedLines, 0);
@@ -223,9 +223,9 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
       if (!matchesPO && !matchesLine) return false;
     }
 
-    // Default 'active': only show active/in-progress orders (exclude completed)
+    // Default 'active': only show active/in-progress orders ready for this role's stage (exclude orders where stage is locked or completed)
     if (filterTab === 'active') {
-      return !group.isAllCompleted && !group.po.isClosed && group.po.status !== 'Completed';
+      return !group.isAllCompleted && !group.po.isClosed && group.po.status !== 'Completed' && group.hasActiveWork;
     }
     if (filterTab === 'ready') {
       return !group.isAllCompleted && (group.readyToStartLines > 0 || group.readyToCompleteLines > 0);
@@ -234,7 +234,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
       return !group.isAllCompleted && group.startedLines > 0;
     }
     if (filterTab === 'delayed') {
-      return !group.isAllCompleted && group.hasDelay;
+      return !group.isAllCompleted && group.hasDelay && group.hasActiveWork;
     }
     if (filterTab === 'completed') {
       return group.isAllCompleted || group.po.isClosed || group.po.status === 'Completed';
@@ -733,10 +733,10 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
               const hasDelayedProducts = group.delayedLines > 0;
               const delayedProductNames = group.lines.filter(l => l.isDelayed).map(l => `${l.line.productName} (+${l.milestone.varianceDays || 0}d)`);
 
-              // Separate active lines and completed lines to avoid clumsy congestion
-              const activeLines = group.lines.filter(l => !l.isDone);
+              // Separate active lines and completed lines to avoid clumsy congestion (only show unlocked ready lines in active view)
+              const activeLines = group.lines.filter(l => !l.isDone && l.isPrereqDone);
               const completedLines = group.lines.filter(l => l.isDone);
-              const linesToDisplay = showCompletedLines ? group.lines : (activeLines.length > 0 ? activeLines : completedLines);
+              const linesToDisplay = showCompletedLines ? group.lines : (activeLines.length > 0 ? activeLines : (filterTab === 'completed' ? completedLines : group.lines));
 
               return (
                 <div

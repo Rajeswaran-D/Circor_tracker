@@ -16,7 +16,8 @@ import {
   X,
   RefreshCw,
   Eye,
-  Info
+  Info,
+  ShieldAlert
 } from 'lucide-react';
 
 interface BulkImportModalProps {
@@ -97,7 +98,14 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
     runValidation(text);
   };
 
+  const isAuthorized = activeRole === 'Project Management' || activeRole === 'Sales / AE (Customer PO)';
+
   const handleImport = () => {
+    if (!isAuthorized) {
+      alert(`Permission Denied: Your current role (${activeRole}) is not authorized to bulk import orders.`);
+      return;
+    }
+
     if (!previewResult || !previewResult.isValid || previewResult.previewPOs.length === 0) return;
 
     setIsProcessing(true);
@@ -182,17 +190,28 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
 
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto space-y-5 flex-1 text-slate-800 text-xs">
-          
-          {/* Top Instruction Banner */}
-          <div className="bg-blue-50/70 border border-blue-200/80 rounded-xl p-3.5 flex items-start gap-3">
-            <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
-            <div className="space-y-1 text-blue-900">
-              <p className="font-semibold">How Bulk Import Works:</p>
-              <p className="text-blue-800 leading-relaxed">
-                Provide <strong>PO Number, Customer, Tag/Line, Qty</strong>, and fill out historical actual completion dates for stages (e.g. <code>S1_CustomerPO_Actual</code> through <code>S14_Shipment_Actual</code>). The engine automatically marks past stages as completed, activates the current milestone, and derives 14-stage baseline matrix schedules without disrupting ongoing system workflows.
+          {!isAuthorized && (
+            <div className="bg-amber-50 border border-amber-300 rounded-2xl p-6 text-center text-amber-900 space-y-2">
+              <ShieldAlert className="w-10 h-10 text-amber-600 mx-auto" />
+              <p className="font-bold text-sm">Bulk Import Restricted</p>
+              <p className="text-xs text-amber-800">
+                Your current active role (<strong>{activeRole}</strong>) does not have authorization to import purchase orders. Only <strong>Sales / AE (Customer PO)</strong> or <strong>Project Management (Admin)</strong> can perform bulk imports.
               </p>
             </div>
-          </div>
+          )}
+
+          {isAuthorized && (
+            <>
+              {/* Top Instruction Banner */}
+              <div className="bg-blue-50/70 border border-blue-200/80 rounded-xl p-3.5 flex items-start gap-3">
+                <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                <div className="space-y-1 text-blue-900">
+                  <p className="font-semibold">How Bulk Import Works:</p>
+                  <p className="text-blue-800 leading-relaxed">
+                    Provide <strong>PO Number, Customer, Tag/Line, Qty</strong>, and fill out historical actual completion dates for stages (e.g. <code>S1_CustomerPO_Actual</code> through <code>S14_Shipment_Actual</code>). The engine automatically marks past stages as completed, activates the current milestone, and derives 14-stage baseline matrix schedules without disrupting ongoing system workflows.
+                  </p>
+                </div>
+              </div>
 
           {/* Mode Switcher */}
           <div className="flex items-center justify-between border-b border-slate-200 pb-3">
@@ -493,6 +512,8 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
               </div>
             </div>
           )}
+          </>
+          )}
 
           {/* Success Banner */}
           {successMsg && (
@@ -513,30 +534,32 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
             Cancel
           </button>
 
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              disabled={!previewResult || !previewResult.isValid || isProcessing || previewResult.previewPOs.length === 0}
-              onClick={handleImport}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs shadow-md transition-all cursor-pointer ${
-                previewResult && previewResult.isValid && !isProcessing && previewResult.previewPOs.length > 0
-                  ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
-                  : 'bg-slate-300 text-slate-500 cursor-not-allowed'
-              }`}
-            >
-              {isProcessing ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  Importing & Generating Schedules...
-                </>
-              ) : (
-                <>
-                  <UploadCloud className="w-4 h-4" />
-                  Import {previewResult ? previewResult.totalPOs : 0} Orders ({previewResult ? previewResult.totalProductLines : 0} Product Lines)
-                </>
-              )}
-            </button>
-          </div>
+          {isAuthorized && (
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                disabled={!previewResult || !previewResult.isValid || isProcessing || previewResult.previewPOs.length === 0}
+                onClick={handleImport}
+                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs shadow-md transition-all cursor-pointer ${
+                  previewResult && previewResult.isValid && !isProcessing && previewResult.previewPOs.length > 0
+                    ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                    : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                }`}
+              >
+                {isProcessing ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Importing & Generating Schedules...
+                  </>
+                ) : (
+                  <>
+                    <UploadCloud className="w-4 h-4" />
+                    Import {previewResult ? previewResult.totalPOs : 0} Orders ({previewResult ? previewResult.totalProductLines : 0} Product Lines)
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
