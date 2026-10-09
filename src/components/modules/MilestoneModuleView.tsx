@@ -18,7 +18,8 @@ import {
   Archive,
   Eye,
   EyeOff,
-  X
+  X,
+  Search
 } from 'lucide-react';
 import { CloseOrderModal } from '../modals/CloseOrderModal';
 import { DelayAnalysisFlow } from '../common/DelayAnalysisFlow';
@@ -542,34 +543,41 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
           <p className="text-xs text-slate-300 mt-1 max-w-2xl">{description}</p>
         </div>
 
-        {/* View Mode Switcher & Search */}
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex bg-white/10 p-1 rounded-xl border border-white/15">
+        {/* View Mode Switcher & Search Toolbar */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0 self-stretch sm:self-auto">
+          <div className="flex bg-black/30 p-1 rounded-xl border border-white/10 shadow-inner">
             <button
               onClick={() => setViewMode('cards')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                viewMode === 'cards' ? 'bg-emerald-500 text-white shadow-xs' : 'text-slate-300 hover:text-white'
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                viewMode === 'cards'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'text-slate-300 hover:text-white hover:bg-white/5'
               }`}
             >
-              <Layers className="w-3.5 h-3.5" /> PO Groups & Batch
+              <Layers className="w-3.5 h-3.5" /> PO Groups &amp; Batch
             </button>
             <button
               onClick={() => setViewMode('matrix')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                viewMode === 'matrix' ? 'bg-emerald-500 text-white shadow-xs' : 'text-slate-300 hover:text-white'
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                viewMode === 'matrix'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'text-slate-300 hover:text-white hover:bg-white/5'
               }`}
             >
               <LayoutGrid className="w-3.5 h-3.5" /> Stage Matrix Grid
             </button>
           </div>
 
-          <input
-            type="text"
-            placeholder="Search PO #, Customer, Product..."
-            value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
-            className="px-3.5 py-2 rounded-xl text-xs bg-white/10 text-white placeholder-slate-400 border border-white/20 focus:outline-none focus:ring-2 focus:ring-emerald-400 font-mono w-60"
-          />
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search PO, Customer, Product..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="pl-8.5 pr-3.5 py-1.5 rounded-xl text-xs bg-black/30 text-white placeholder-slate-400 border border-white/10 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 font-mono w-full sm:w-56 transition-all"
+            />
+          </div>
         </div>
       </div>
 
