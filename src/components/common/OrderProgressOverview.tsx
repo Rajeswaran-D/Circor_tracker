@@ -245,102 +245,136 @@ export const OrderProgressOverview: React.FC<OrderProgressOverviewProps> = ({
 
       {/* Product-Wise Detailed Progress Section */}
       {isExpanded && (
-        <div className="border-t border-slate-700/80 bg-slate-950/40 p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+        <div className="border-t border-slate-700/80 bg-slate-950/50 p-5 sm:p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pb-1">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
               <Package className="w-4 h-4 text-cyan-400" />
-              Product-Wise Progress Breakdown ({totalLines} Items)
+              Product-Wise Progress Breakdown ({totalLines} {totalLines === 1 ? 'Product Line' : 'Product Lines'})
             </h3>
             <span className="text-[11px] font-mono text-slate-400">
               Each product tracks 14 standardized manufacturing stages
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {lineDetails.map(({ line, totalMilestones, completedMilestones, activeMs, progressPct, isCompleted, qty }) => (
-              <div
-                key={line.id}
-                className="bg-slate-900/90 border border-slate-700/70 hover:border-cyan-500/50 rounded-xl p-3.5 space-y-2.5 transition-all shadow-md group"
-              >
-                {/* Product Title & Badge */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="space-y-0.5">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-cyan-400 text-xs">{line.lineNumber}</span>
-                      <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-purple-500/20 text-purple-300 border border-purple-500/30">
+          <div className={`grid gap-4 ${
+            totalLines === 1 
+              ? 'grid-cols-1' 
+              : totalLines === 2 
+              ? 'grid-cols-1 md:grid-cols-2' 
+              : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+          }`}>
+            {lineDetails.map(({ line, totalMilestones, completedMilestones, activeMs, progressPct, isCompleted, qty }) => {
+              const finalMs = (line.milestones || []).slice(-1)[0];
+              const targetDelivery = finalMs?.committedBaselineEndDate || po.committedDeliveryDate;
+              const revisedDelivery = isCompleted
+                ? (finalMs?.actualEndDate || targetDelivery)
+                : (finalMs?.forecastEndDate || po.revisedDeliveryDate || targetDelivery);
+              const isDelayedLine = (line.overallVarianceDays && line.overallVarianceDays > 0) || (revisedDelivery > targetDelivery);
+
+              return (
+                <div
+                  key={line.id}
+                  className="bg-slate-900/90 border border-slate-700/80 hover:border-cyan-500/50 rounded-xl p-4 space-y-3.5 transition-all shadow-md group relative overflow-hidden"
+                >
+                  {/* Top Bar: Line ID, Tag, and % Badge */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono font-bold text-cyan-400 text-xs px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/60">
+                        {line.lineNumber}
+                      </span>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-purple-500/20 text-purple-300 border border-purple-500/30">
                         {line.designType}
                       </span>
                     </div>
-                    <div className="font-bold text-white text-xs line-clamp-1 group-hover:text-cyan-300 transition-colors">
+
+                    <span className={`px-2.5 py-0.5 rounded-full font-mono text-[11px] font-bold border shrink-0 ${
+                      isCompleted
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                        : line.status === 'Delayed'
+                        ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                        : 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                    }`}>
+                      {isCompleted ? '100% Done' : `${progressPct}%`}
+                    </span>
+                  </div>
+
+                  {/* Product Name */}
+                  <div>
+                    <h4 className="font-bold text-white text-sm leading-snug group-hover:text-cyan-300 transition-colors" title={line.productName}>
                       {line.productName}
+                    </h4>
+                  </div>
+
+                  {/* Individual Line Progress Bar & Stage Metric */}
+                  <div className="space-y-1.5 bg-slate-950/50 p-2.5 rounded-lg border border-slate-800/80">
+                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-300">
+                      <span className="font-semibold text-slate-200">
+                        {completedMilestones} of {totalMilestones} Stages
+                      </span>
+                      <span className="text-slate-400">
+                        Qty: <strong className="text-white font-bold">{qty} Pcs</strong>
+                      </span>
+                    </div>
+
+                    <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
+                      <div
+                        className={`h-full rounded-full transition-all duration-700 ${
+                          isCompleted
+                            ? 'bg-emerald-500'
+                            : line.status === 'Delayed'
+                            ? 'bg-rose-500'
+                            : 'bg-gradient-to-r from-cyan-500 to-teal-400'
+                        }`}
+                        style={{ width: `${progressPct}%` }}
+                      />
                     </div>
                   </div>
 
-                  <span className={`px-2 py-0.5 rounded-full font-mono text-[10px] font-bold border shrink-0 ${
-                    isCompleted
-                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                      : line.status === 'Delayed'
-                      ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                      : 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
-                  }`}>
-                    {isCompleted ? '100%' : `${progressPct}%`}
-                  </span>
-                </div>
-
-                {/* Individual Line Progress Bar */}
-                <div className="space-y-1">
-                  <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
-                    <div
-                      className={`h-full rounded-full transition-all duration-700 ${
-                        isCompleted
-                          ? 'bg-emerald-500'
-                          : line.status === 'Delayed'
-                          ? 'bg-rose-500'
-                          : 'bg-gradient-to-r from-cyan-500 to-teal-400'
-                      }`}
-                      style={{ width: `${progressPct}%` }}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
-                    <span>{completedMilestones} / {totalMilestones} Stages Complete</span>
-                    <span>Qty: <strong className="text-slate-200">{qty} Pcs</strong></span>
-                  </div>
-                </div>
-
-                {/* Product Line Timeline (Baseline vs Revised) */}
-                {(() => {
-                  const finalMs = (line.milestones || []).slice(-1)[0];
-                  const targetDelivery = finalMs?.committedBaselineEndDate || po.committedDeliveryDate;
-                  const revisedDelivery = finalMs?.actualEndDate || finalMs?.forecastEndDate || targetDelivery;
-                  const isDelayedLine = (line.overallVarianceDays && line.overallVarianceDays > 0) || (revisedDelivery > targetDelivery);
-
-                  return (
-                    <div className="flex items-center justify-between text-[10px] font-mono px-2 py-1 rounded bg-slate-950/60 border border-slate-800">
-                      <span className="text-slate-400">Baseline: <strong className="text-slate-300">{targetDelivery}</strong></span>
-                      <span className={isDelayedLine ? 'text-rose-400 font-bold' : 'text-emerald-400'}>
-                        {isCompleted ? 'Delivered: ' : 'Revised: '}<strong>{revisedDelivery}</strong>
-                      </span>
+                  {/* Clean Delivery Schedule Block (Baseline vs Revised) */}
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono p-2.5 rounded-lg bg-slate-950/70 border border-slate-800">
+                    <div className="space-y-0.5 min-w-0">
+                      <div className="text-[10px] text-slate-400 font-sans uppercase font-medium">
+                        Baseline Date
+                      </div>
+                      <div className="text-slate-200 font-semibold font-mono whitespace-nowrap">
+                        {targetDelivery}
+                      </div>
                     </div>
-                  );
-                })()}
+                    <div className="space-y-0.5 text-right min-w-0">
+                      <div className="text-[10px] text-slate-400 font-sans uppercase font-medium">
+                        {isCompleted ? 'Delivered Date' : 'Revised Target'}
+                      </div>
+                      <div className={`font-semibold font-mono whitespace-nowrap ${isDelayedLine ? 'text-rose-400 font-bold' : 'text-emerald-400'}`}>
+                        {revisedDelivery}
+                      </div>
+                    </div>
+                  </div>
 
-                {/* Active Milestone Status Footer */}
-                <div className="pt-1 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400">
-                  <span className="truncate max-w-[170px]">
-                    {isCompleted ? (
-                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                        <Check className="w-3 h-3" /> Fully Delivered
-                      </span>
-                    ) : (
-                      <span>Current: <strong className="text-slate-200">{activeMs ? `${activeMs.stageOrder}. ${activeMs.name.replace(/^\d+\.\s*/, '')}` : 'In Progress'}</strong></span>
-                    )}
-                  </span>
-                  <span className={line.overallVarianceDays > 0 ? 'text-rose-400 font-mono font-bold' : 'text-emerald-400 font-mono'}>
-                    {line.overallVarianceDays > 0 ? `+${line.overallVarianceDays}d` : 'On track'}
-                  </span>
+                  {/* Active Milestone Status Footer */}
+                  <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2 text-xs">
+                    <div className="min-w-0 flex-1 flex items-center gap-1.5" title={activeMs ? `${activeMs.stageOrder}. ${activeMs.name.replace(/^\d+\.\s*/, '')}` : undefined}>
+                      <span className="text-slate-400 text-[11px] shrink-0">Current:</span>
+                      {isCompleted ? (
+                        <span className="text-emerald-400 font-semibold text-[11px] flex items-center gap-1 truncate">
+                          <Check className="w-3.5 h-3.5 shrink-0" /> Fully Delivered
+                        </span>
+                      ) : (
+                        <span className="font-semibold text-slate-200 text-[11px] truncate">
+                          {activeMs ? `${activeMs.stageOrder}. ${activeMs.name.replace(/^\d+\.\s*/, '')}` : 'In Progress'}
+                        </span>
+                      )}
+                    </div>
+                    <span className={`shrink-0 font-mono text-[10px] px-2 py-0.5 rounded font-bold whitespace-nowrap ${
+                      line.overallVarianceDays > 0 
+                        ? 'text-rose-300 bg-rose-500/20 border border-rose-500/30' 
+                        : 'text-emerald-300 bg-emerald-500/20 border border-emerald-500/30'
+                    }`}>
+                      {line.overallVarianceDays > 0 ? `+${line.overallVarianceDays}d Delay` : 'On track'}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

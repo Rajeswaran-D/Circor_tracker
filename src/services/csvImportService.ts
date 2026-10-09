@@ -844,13 +844,14 @@ export function parseAndValidateCsv(
         }));
       }
 
-      // Build baseline schedule starting at effectivePoDate
+      // Build baseline schedule starting at effectivePoDate aligned with contractual delivery date
       const baseMilestones = buildTemplateSchedule({
         template: tmpl,
         designType,
         materials: lineMaterials,
         startDate: effectivePoDate,
-        lineId
+        lineId,
+        targetEndDate: group.deliveryDate
       });
 
       // Determine the highest milestone index that has an explicit actual completion date

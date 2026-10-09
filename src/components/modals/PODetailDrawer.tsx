@@ -353,12 +353,14 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
                   {po.productLines.map((line, idx) => {
-                    const isLineDelayed = line.status === 'Delayed' || (line.overallVarianceDays && line.overallVarianceDays > 0);
                     const lineCompletedCount = (line.milestones || []).filter(m => m.status === 'Completed' || Boolean(m.actualEndDate)).length;
 
                     const finalMs = (line.milestones || []).slice(-1)[0];
                     const lineBaseline = finalMs?.committedBaselineEndDate || po.committedDeliveryDate;
-                    const lineRevised = finalMs?.actualEndDate || finalMs?.forecastEndDate || lineBaseline;
+                    const lineRevised = line.status === 'Completed'
+                      ? (finalMs?.actualEndDate || lineBaseline)
+                      : (finalMs?.forecastEndDate || po.revisedDeliveryDate || lineBaseline);
+                    const isLineDelayed = (line.overallVarianceDays && line.overallVarianceDays > 0) || (lineRevised > lineBaseline);
 
                     return (
                       <div

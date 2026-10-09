@@ -260,16 +260,40 @@ const ALIGNED_14_STAGES = [
   { key: 'shipment', name: '14. Final Shipment & Dispatch', durationDays: 5 },
 ];
 
-function repairMilestonesTo14Aligned(existingMilestones: Milestone[], poDate: string, lineId: string): Milestone[] {
+function repairMilestonesTo14Aligned(
+  existingMilestones: Milestone[], 
+  poDate: string, 
+  lineId: string, 
+  targetEndDate?: string
+): Milestone[] {
   const cleanExistingMilestones = existingMilestones || [];
-  let runningDate = poDate || todayLocal();
+  const start = poDate && isValidDateString(poDate) ? poDate : todayLocal();
+  
+  const defaultTotalDays = ALIGNED_14_STAGES.reduce((sum, s) => sum + s.durationDays, 0);
+  const targetTotalDays = targetEndDate && isValidDateString(targetEndDate)
+    ? Math.max(14, getDaysDifference(start, targetEndDate))
+    : null;
+
+  let runningDate = start;
   return ALIGNED_14_STAGES.map((def, idx) => {
     const existing = cleanExistingMilestones.find(m => m.key === def.key || (m.key === 'baseline_review' && def.key === 'pm_baseline') || (m.key === 'qc_pass' && def.key === 'fg') || m.stageOrder === idx + 1);
-    const duration = Math.max(1, existing?.committedDurationDays || def.durationDays);
+    
+    let duration: number;
+    if (targetTotalDays) {
+      if (idx === ALIGNED_14_STAGES.length - 1) {
+        duration = Math.max(1, getDaysDifference(runningDate, targetEndDate!));
+      } else {
+        duration = Math.max(1, Math.round((def.durationDays / defaultTotalDays) * targetTotalDays));
+      }
+    } else {
+      duration = Math.max(1, existing?.committedDurationDays || def.durationDays);
+    }
     
     // Baseline start is ALWAYS chained from the previous stage's baseline end (runningDate)
     const msStart = (idx === 0 && existing?.committedBaselineStartDate) ? existing.committedBaselineStartDate : runningDate;
-    const msEnd = addDays(msStart, duration);
+    const msEnd = (targetTotalDays && idx === ALIGNED_14_STAGES.length - 1)
+      ? targetEndDate!
+      : addDays(msStart, duration);
     runningDate = msEnd;
 
     return {
@@ -298,7 +322,7 @@ function repairMilestonesTo14Aligned(existingMilestones: Milestone[], poDate: st
 
 const normalizeMilestoneFlows = (orders: PurchaseOrder[], todayStr: string): PurchaseOrder[] => orders.map(po => {
   const recalculatedLines = po.productLines.map(line => {
-    const milestones = repairMilestonesTo14Aligned(line.milestones, po.poDate, line.id);
+    const milestones = repairMilestonesTo14Aligned(line.milestones, po.poDate, line.id, po.committedDeliveryDate);
     const materials = normalizeMaterialDates(line.materials, todayStr);
 
     const syncedLine = applyMaterialProgress({ ...line, materials, milestones });
@@ -1758,7 +1782,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         designType: raw.designType,
         materials: raw.materials.length > 0 ? raw.materials : [{ leadTimeDays: maxMatLeadTime } as any],
         startDate: effectivePoDate,
-        lineId: raw.lineId
+        lineId: raw.lineId,
+        targetEndDate: newPoData.committedDeliveryDate
       });
 
       // Milestone 1 (Customer Purchase Order Intake) is completed upon order creation in the PO module
@@ -1906,13 +1931,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const closePurchaseOrder = (poId: string, closureNotes: string, user: string) => {
+    // Strict Role-Based Governance: Only PM Baseline and Project Management (Admin) can close orders
+    const isAllowedRole = activeRole === 'Project Management' || activeRole === 'Project Manager (PM Baseline)';
+    if (!isAllowedRole) {
+      return {
+        success: false,
+        error: `Permission Denied: Only Project Manager (PM Baseline) or Project Management (Admin) can formally sign off and close completed purchase orders. Current role: ${activeRole}`
+      };
+    }
+
     const po = purchaseOrders.find(p => p.id === poId);
     if (!po) {
       return { success: false, error: 'Purchase Order not found.' };
     }
 
     const allMilestonesCompleted = po.productLines.every(line =>
-      line.milestones.every(m => m.status === 'Completed' || Boolean(m.actualEndDate))
+      line.milestones.every(m => m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100)
     );
 
     if (!allMilestonesCompleted) {

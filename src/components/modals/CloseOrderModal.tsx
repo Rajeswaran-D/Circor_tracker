@@ -22,6 +22,7 @@ export const CloseOrderModal: React.FC<CloseOrderModalProps> = ({
 
   if (!isOpen || !po) return null;
 
+  const isAuthorized = activeRole === 'Project Management' || activeRole === 'Project Manager (PM Baseline)';
   const totalQty = po.productLines.reduce((acc, l) => acc + (l.qty || 1), 0);
   const allMilestonesComplete = po.productLines.length > 0 && po.productLines.every(line =>
     line.milestones.every(m => m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100)
@@ -30,13 +31,18 @@ export const CloseOrderModal: React.FC<CloseOrderModalProps> = ({
   const presetNotes = [
     'All products delivered & site sign-off received from customer.',
     'Final shipment dispatched with tracking documents. FAT passed.',
-    'Full order delivered on schedule — closed by plant operator.',
+    'Full order delivered on schedule — formally closed by Project Manager.',
     'Customer inspection cleared, delivery receipt signed DO-2026.'
   ];
 
   const handleConfirmClose = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    if (!isAuthorized) {
+      setError(`Permission Denied: Only Project Manager (PM Baseline) or Project Management (Admin) can close purchase orders. Current role: ${activeRole}`);
+      return;
+    }
 
     const notesToUse = closureNotes.trim() || 'Order delivered and verified across all product lines. Formally closed.';
     const result = closePurchaseOrder(po.id, notesToUse, `${activeRole} User`);
@@ -180,13 +186,22 @@ export const CloseOrderModal: React.FC<CloseOrderModalProps> = ({
             </div>
           </div>
 
-          {/* Info Banner */}
-          <div className="p-3 bg-slate-100 border border-slate-200 rounded-xl text-[11px] text-slate-600 flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
-            <span>
-              Closing this order locks all milestones and archives the PO in Completed Orders. An immutable audit entry will be recorded.
-            </span>
-          </div>
+          {/* Info Banner & Authorization Banner */}
+          {!isAuthorized ? (
+            <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl text-[11px] text-amber-900 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                <strong>Role Restriction:</strong> Only <strong>Project Manager (PM Baseline)</strong> or <strong>Project Management (Admin)</strong> can formally sign off and close completed purchase orders.
+              </span>
+            </div>
+          ) : (
+            <div className="p-3 bg-slate-100 border border-slate-200 rounded-xl text-[11px] text-slate-600 flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
+              <span>
+                Closing this order locks all milestones and archives the PO in Completed Orders. An immutable audit entry will be recorded.
+              </span>
+            </div>
+          )}
 
           {/* Actions */}
           <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
@@ -199,9 +214,9 @@ export const CloseOrderModal: React.FC<CloseOrderModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={!allMilestonesComplete}
+              disabled={!allMilestonesComplete || !isAuthorized}
               className={`px-5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 shadow-xs transition-all ${
-                allMilestonesComplete
+                allMilestonesComplete && isAuthorized
                   ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer shadow-emerald-700/20'
                   : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
               }`}

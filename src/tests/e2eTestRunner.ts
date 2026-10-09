@@ -400,6 +400,14 @@ assert(canCloseComplete, 'Order closure is fully unlocked when all 14 stages acr
 const poStatusAfterFullCompletion = getPOManufacturingStatus(po);
 assert(poStatusAfterFullCompletion.completedStagesCount >= 14, 'getPOManufacturingStatus reports 100% stage completion');
 
+// Role-Based Closure Governance Check
+const isAuthorizedRole = (role: string) => role === 'Project Management' || role === 'Project Manager (PM Baseline)';
+assert(!isAuthorizedRole('Stores (Shipment)'), 'Stores (Shipment) role is strictly blocked from closing orders');
+assert(!isAuthorizedRole('Sales / AE (Customer PO)'), 'Sales / AE role is strictly blocked from closing orders');
+assert(!isAuthorizedRole('QC (TRN)'), 'QC (TRN) role is strictly blocked from closing orders');
+assert(isAuthorizedRole('Project Manager (PM Baseline)'), 'Project Manager (PM Baseline) is authorized to formally close orders');
+assert(isAuthorizedRole('Project Management'), 'Project Management (Admin) is authorized to formally close orders');
+
 // ----------------------------------------------------------------------------
 // TEST GROUP 7: Inherited Predecessor Delay Start Chaining & Zero New Delay Validation
 // ----------------------------------------------------------------------------

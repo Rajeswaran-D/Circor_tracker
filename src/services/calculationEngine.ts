@@ -383,8 +383,9 @@ export function buildTemplateSchedule(params: {
   materials: MaterialItem[];
   startDate: string;
   lineId: string;
+  targetEndDate?: string;
 }): Milestone[] {
-  const { template, materials, startDate, lineId } = params;
+  const { template, materials, startDate, lineId, targetEndDate } = params;
 
   const rawMaterialLeadTime = materials.length > 0
     ? Math.max(...materials.map(m => m.leadTimeDays))
@@ -412,13 +413,37 @@ export function buildTemplateSchedule(params: {
     ];
   }
 
-  let runningDate = startDate;
-
-  return durations.map((m, idx) => {
-    const duration = Math.max(
+  // Calculate raw unscaled durations
+  const rawDurations = durations.map(m => {
+    return Math.max(
       1,
       (m.milestoneKey === 'material_receipt' || m.milestoneKey === 'raw_material') && rawMaterialLeadTime > 0 ? rawMaterialLeadTime : m.durationDays
     );
+  });
+
+  const totalRawDays = rawDurations.reduce((a, b) => a + b, 0);
+
+  // If targetEndDate is provided and is after startDate, scale durations proportionally to fit exact contractual delivery target
+  let scaledDurations = [...rawDurations];
+  if (targetEndDate && isValidDateString(targetEndDate) && targetEndDate > startDate) {
+    const totalTargetDays = getDaysDifference(startDate, targetEndDate);
+    if (totalTargetDays >= durations.length) {
+      let allocatedDays = 0;
+      scaledDurations = rawDurations.map((rawD, idx) => {
+        if (idx === rawDurations.length - 1) {
+          return Math.max(1, totalTargetDays - allocatedDays);
+        }
+        const proportional = Math.max(1, Math.round((rawD / totalRawDays) * totalTargetDays));
+        allocatedDays += proportional;
+        return proportional;
+      });
+    }
+  }
+
+  let runningDate = startDate;
+
+  return durations.map((m, idx) => {
+    const duration = scaledDurations[idx];
     const msStart = runningDate;
     const msEnd = addDays(msStart, duration);
     runningDate = msEnd;
