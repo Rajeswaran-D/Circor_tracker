@@ -71,6 +71,11 @@ interface AppContextType {
     delayCategory?: DelayCategory;
     delayOwner?: string;
     delayReason?: string;
+    orderedDate?: string;
+    expectedDate?: string;
+    receivedDate?: string;
+    inspectionResult?: 'Passed' | 'Rejected' | 'Pending';
+    grnNumber?: string;
   }) => { success: boolean; error?: string };
 
   batchUpdateMilestoneEvents: (items: Array<{
@@ -89,6 +94,11 @@ interface AppContextType {
     delayCategory?: DelayCategory;
     delayOwner?: string;
     delayReason?: string;
+    orderedDate?: string;
+    expectedDate?: string;
+    receivedDate?: string;
+    inspectionResult?: 'Passed' | 'Rejected' | 'Pending';
+    grnNumber?: string;
   }>) => { success: boolean; error?: string; count?: number };
 
   acceptMilestone: (params: { poId: string; productLineId: string; milestoneKey: string; user: string }) => { success: boolean; error?: string };
@@ -788,6 +798,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     delayCategory?: DelayCategory;
     delayOwner?: string;
     delayReason?: string;
+    orderedDate?: string;
+    expectedDate?: string;
+    receivedDate?: string;
+    inspectionResult?: 'Passed' | 'Rejected' | 'Pending';
+    grnNumber?: string;
   }>): { success: boolean; error?: string; count?: number } => {
     if (items.length === 0) return { success: true, count: 0 };
     const todayStr = todayLocal();
@@ -972,7 +987,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           updatedMsList = cascadeNextMilestoneStart(updatedMsList, currentMsIndex, item.eventDate, item.user);
         }
 
-        const syncedLine = applyMaterialProgress({ ...l, milestones: updatedMsList });
+        // Update line materials if material receipt data provided
+        let updatedMaterials = l.materials;
+        if ((item.milestoneKey === 'material_receipt' || item.milestoneKey === 'raw_material') && l.materials && l.materials.length > 0) {
+          updatedMaterials = l.materials.map(mat => ({
+            ...mat,
+            orderedDate: item.orderedDate || mat.orderedDate || (item.eventType === 'start' ? item.eventDate : undefined),
+            expectedDate: item.expectedDate || mat.expectedDate || (item.orderedDate ? addDays(item.orderedDate, mat.leadTimeDays || 14) : undefined),
+            receivedDate: item.eventType === 'complete' ? (item.receivedDate || item.eventDate) : mat.receivedDate,
+            inspectionResult: item.inspectionResult || mat.inspectionResult || (item.eventType === 'complete' ? 'Passed' : mat.inspectionResult || 'Pending')
+          }));
+        }
+
+        const syncedLine = applyMaterialProgress({ ...l, milestones: updatedMsList, materials: updatedMaterials });
         const tempLine = { ...syncedLine };
         return recalculateProductLine(tempLine, todayStr, config.atRiskThresholdDays, config.delayedThresholdDays);
       });

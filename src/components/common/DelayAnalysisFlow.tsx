@@ -38,6 +38,7 @@ export interface DelayStep {
  */
 function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
   hasDelays: boolean;
+  hasHistoricalDelays: boolean;
   rootDelayStep: DelayStep | null;
   delaySteps: DelayStep[];
   allDelayOriginSteps: DelayStep[];
@@ -45,6 +46,7 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
   netVarianceDays: number;
   totalDaysDelayed: number;
   totalDaysRecovered: number;
+  isRecovered: boolean;
   aheadDays: number;
 } {
   const milestones = line.milestones || [];
@@ -77,7 +79,7 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
 
     const delta = activeVariance - prevActiveVariance;
 
-    // 1. Stage added new delay days and is actively delayed
+    // 1. Stage added new delay days
     if (delta > 0 && activeVariance > 0) {
       totalDaysDelayed += delta;
       const step: DelayStep = {
@@ -122,7 +124,7 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
         isRecovery: true,
         isAdditionalDelay: false,
         delayCategory: ms.delayCategory,
-        delayReason: ms.delayReason || `${recoveredDays}d recovered on this stage`,
+        delayReason: ms.delayReason || `${recoveredDays}d delay recovered on this stage`,
         plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
         actualDates: { start: actualStart, end: actualEnd, duration: actualDuration },
         productLineName: line.productName,
@@ -134,38 +136,44 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
       delaySteps.push(step);
       recoverySteps.push(step);
     } 
-    // 3. Stage has an explicit user-entered delay reason and has active variance
-    else if (Boolean(ms.delayReason) && !ms.delayReason?.startsWith('Cascaded') && !ms.delayReason?.startsWith('Inherited') && activeVariance > 0 && !delaySteps.some(s => s.stageKey === ms.key)) {
-      const step: DelayStep = {
-        stageOrder: ms.stageOrder,
-        stageName: ms.name,
-        stageKey: ms.key,
-        varianceDays: activeVariance,
-        delayDays: activeVariance,
-        stageDelayAdded: activeVariance,
-        cumulativeDelay: activeVariance,
-        stageDelta: activeVariance,
-        isRootCause: false,
-        isRecovery: false,
-        isAdditionalDelay: true,
-        delayCategory: ms.delayCategory,
-        delayReason: ms.delayReason,
-        plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
-        actualDates: { start: actualStart, end: actualEnd, duration: actualDuration },
-        productLineName: line.productName,
-        lineNumber: line.lineNumber,
-        productLineId: line.id,
-        affectedProducts: [{ lineId: line.id, lineNumber: line.lineNumber, productName: line.productName, varianceDays: activeVariance, delayReason: ms.delayReason }]
-      };
+    // 3. Stage has an explicit user-entered delay reason or finished late historically
+    else if (
+      (Boolean(ms.delayReason) && !ms.delayReason?.startsWith('Cascaded') && !ms.delayReason?.startsWith('Inherited')) ||
+      (actualEnd && plannedEnd && actualEnd > plannedEnd)
+    ) {
+      if (!delaySteps.some(s => s.stageKey === ms.key)) {
+        const historicalDelay = actualEnd && plannedEnd && actualEnd > plannedEnd ? getDaysDifference(plannedEnd, actualEnd) : Math.max(1, activeVariance);
+        const step: DelayStep = {
+          stageOrder: ms.stageOrder,
+          stageName: ms.name,
+          stageKey: ms.key,
+          varianceDays: activeVariance,
+          delayDays: historicalDelay,
+          stageDelayAdded: historicalDelay,
+          cumulativeDelay: activeVariance,
+          stageDelta: historicalDelay,
+          isRootCause: false,
+          isRecovery: false,
+          isAdditionalDelay: true,
+          delayCategory: ms.delayCategory,
+          delayReason: ms.delayReason,
+          plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
+          actualDates: { start: actualStart, end: actualEnd, duration: actualDuration },
+          productLineName: line.productName,
+          lineNumber: line.lineNumber,
+          productLineId: line.id,
+          affectedProducts: [{ lineId: line.id, lineNumber: line.lineNumber, productName: line.productName, varianceDays: activeVariance, delayReason: ms.delayReason }]
+        };
 
-      delaySteps.push(step);
+        delaySteps.push(step);
+        if (historicalDelay > 0 && totalDaysDelayed === 0) {
+          totalDaysDelayed += historicalDelay;
+        }
+      }
     }
   }
 
   // Prioritize the true delay origin:
-  // 1. Stage where the user directly recorded an explicit delay reason
-  // 2. Stage with the largest newly added delay (stageDelayAdded > 0)
-  // 3. Earliest non-recovery delay step
   const nonRecoverySteps = delaySteps.filter(s => !s.isRecovery);
   const stepWithExplicitReason = nonRecoverySteps.find(s => s.delayReason && !s.delayReason.startsWith('Cascaded') && !s.delayReason.startsWith('Inherited'));
   const stepWithMaxAddedDelay = [...nonRecoverySteps].sort((a, b) => (b.stageDelayAdded || 0) - (a.stageDelayAdded || 0))[0];
@@ -183,17 +191,21 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
   const netVarianceDays = Math.max(0, lastMilestoneVariance);
   const aheadDays = lastMilestoneVariance < 0 ? Math.abs(lastMilestoneVariance) : 0;
   const isLineDelayed = line.status === 'Delayed' || netVarianceDays > 0 || (line.overallVarianceDays || 0) > 0;
+  const hasHistoricalDelays = delaySteps.length > 0 || totalDaysDelayed > 0;
+  const isRecovered = !isLineDelayed && hasHistoricalDelays;
   const hasDelays = isLineDelayed && delaySteps.length > 0;
 
   return {
     hasDelays,
+    hasHistoricalDelays,
     rootDelayStep,
     delaySteps,
     allDelayOriginSteps: delaySteps.filter(s => !s.isRecovery),
     recoverySteps,
     netVarianceDays,
-    totalDaysDelayed: hasDelays ? totalDaysDelayed : 0,
-    totalDaysRecovered: hasDelays ? totalDaysRecovered : 0,
+    totalDaysDelayed: totalDaysDelayed > 0 ? totalDaysDelayed : (hasDelays ? netVarianceDays : 0),
+    totalDaysRecovered: totalDaysRecovered,
+    isRecovered,
     aheadDays
   };
 }
@@ -203,6 +215,7 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
  */
 export function extractDelayFlow(po: PurchaseOrder, targetLineId?: string): {
   hasDelays: boolean;
+  hasHistoricalDelays: boolean;
   rootDelayStep: DelayStep | null;
   delaySteps: DelayStep[];
   allDelayOriginSteps: DelayStep[];
@@ -217,6 +230,7 @@ export function extractDelayFlow(po: PurchaseOrder, targetLineId?: string): {
   if (!po || !po.productLines || po.productLines.length === 0) {
     return {
       hasDelays: false,
+      hasHistoricalDelays: false,
       rootDelayStep: null,
       delaySteps: [],
       allDelayOriginSteps: [],
@@ -236,16 +250,15 @@ export function extractDelayFlow(po: PurchaseOrder, targetLineId?: string): {
     const res = extractLineDelayFlow(po, line);
     return {
       ...res,
-      allStepsWithVariance: res.delaySteps,
-      isRecovered: false
+      allStepsWithVariance: res.delaySteps
     };
   }
 
   // If no targetLineId is provided, analyze ALL product lines in the PO
   const allLineResults = po.productLines.map(line => extractLineDelayFlow(po, line));
   
-  // Find all delayed lines
-  const delayedLineResults = allLineResults.filter(r => r.hasDelays);
+  // Lines with either active or historical delays
+  const linesWithDelayHistory = allLineResults.filter(r => r.hasHistoricalDelays || r.hasDelays);
 
   // Highest net variance across all lines
   const maxNetVariance = Math.max(...allLineResults.map(r => r.netVarianceDays), 0);
@@ -256,7 +269,7 @@ export function extractDelayFlow(po: PurchaseOrder, targetLineId?: string): {
   const stepMap = new Map<string, DelayStep>();
   const affectedProductsMap = new Map<string, { lineId: string; lineNumber: string; productName: string; varianceDays: number; delayReason?: string }[]>();
 
-  delayedLineResults.forEach(res => {
+  linesWithDelayHistory.forEach(res => {
     res.delaySteps.forEach(step => {
       const existing = stepMap.get(step.stageKey);
       if (!existing || Math.abs(step.stageDelayAdded) > Math.abs(existing.stageDelayAdded)) {
@@ -296,11 +309,14 @@ export function extractDelayFlow(po: PurchaseOrder, targetLineId?: string): {
     });
   }
   const isPODelayed = maxNetVariance > 0 || po.status === 'Delayed' || po.productLines.some(l => l.status === 'Delayed' || (l.overallVarianceDays || 0) > 0);
+  const hasHistoricalDelays = combinedDelaySteps.length > 0 || maxDaysDelayed > 0 || maxDaysRecovered > 0;
+  const isRecovered = !isPODelayed && hasHistoricalDelays;
   const hasDelays = isPODelayed && combinedDelaySteps.length > 0;
-  const aheadDays = !hasDelays ? Math.max(...allLineResults.map(r => r.aheadDays), 0) : 0;
+  const aheadDays = !isPODelayed && !hasHistoricalDelays ? Math.max(...allLineResults.map(r => r.aheadDays), 0) : 0;
 
   return {
     hasDelays,
+    hasHistoricalDelays,
     rootDelayStep,
     delaySteps: combinedDelaySteps,
     allDelayOriginSteps: combinedDelaySteps.filter(s => !s.isRecovery),
@@ -309,7 +325,7 @@ export function extractDelayFlow(po: PurchaseOrder, targetLineId?: string): {
     netVarianceDays: maxNetVariance,
     totalDaysDelayed: maxDaysDelayed,
     totalDaysRecovered: maxDaysRecovered,
-    isRecovered: false,
+    isRecovered,
     aheadDays
   };
 }
@@ -323,6 +339,8 @@ export const DelayAnalysisFlow: React.FC<DelayAnalysisFlowProps> = ({
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const {
     hasDelays,
+    hasHistoricalDelays,
+    isRecovered,
     delaySteps,
     netVarianceDays,
     totalDaysDelayed,
@@ -330,8 +348,8 @@ export const DelayAnalysisFlow: React.FC<DelayAnalysisFlowProps> = ({
     aheadDays
   } = extractDelayFlow(po, lineId);
 
-  // When order has NO delays (on track or ahead of schedule)
-  if (!hasDelays) {
+  // When order has NEVER recorded any delays (clean on-track baseline)
+  if (!hasDelays && !hasHistoricalDelays && delaySteps.length === 0) {
     return (
       <div className={`p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-center justify-between text-xs text-emerald-950 shadow-2xs ${className}`}>
         <div className="flex items-center gap-2.5">
@@ -360,34 +378,51 @@ export const DelayAnalysisFlow: React.FC<DelayAnalysisFlowProps> = ({
     );
   }
 
+  const isResolvedState = isRecovered || (netVarianceDays === 0 && (totalDaysRecovered > 0 || totalDaysDelayed > 0 || delaySteps.length > 0));
   const effectiveDelayDays = netVarianceDays > 0 ? netVarianceDays : totalDaysDelayed;
 
   // Milestone-by-milestone delay & recovery report with collapsible dropdown
   return (
-    <div className={`bg-white border border-rose-200 rounded-2xl overflow-hidden shadow-xs transition-all ${className}`}>
+    <div className={`bg-white rounded-2xl overflow-hidden shadow-xs transition-all border ${
+      isResolvedState ? 'border-emerald-300 ring-1 ring-emerald-200/60' : 'border-rose-200'
+    } ${className}`}>
       
       {/* 1. Header Summary with Dropdown Toggle Arrow */}
       <button
         type="button"
         onClick={() => setIsOpen(prev => !prev)}
-        className="w-full text-left p-3.5 sm:p-4 bg-slate-900 hover:bg-slate-800 transition-colors text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer select-none"
+        className={`w-full text-left p-3.5 sm:p-4 transition-colors text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer select-none ${
+          isResolvedState 
+            ? 'bg-gradient-to-r from-slate-900 via-slate-800 to-emerald-950 hover:bg-slate-800' 
+            : 'bg-slate-900 hover:bg-slate-800'
+        }`}
         title={isOpen ? 'Click to collapse delay log' : 'Click to expand delay log'}
       >
         <div className="flex items-center gap-3">
           <div className="p-1 rounded-lg bg-white/10 hover:bg-white/20 text-slate-200 transition-colors shrink-0">
-            {isOpen ? <ChevronDown className="w-4 h-4 text-rose-300" /> : <ChevronRight className="w-4 h-4 text-slate-300" />}
+            {isOpen ? <ChevronDown className={`w-4 h-4 ${isResolvedState ? 'text-emerald-300' : 'text-rose-300'}`} /> : <ChevronRight className="w-4 h-4 text-slate-300" />}
           </div>
-          <div className="w-8 h-8 rounded-lg bg-rose-500/20 border border-rose-500/30 text-rose-400 flex items-center justify-center shrink-0">
-            <ShieldAlert className="w-4 h-4" />
+          <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border ${
+            isResolvedState 
+              ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' 
+              : 'bg-rose-500/20 border-rose-500/30 text-rose-400'
+          }`}>
+            {isResolvedState ? <CheckCircle2 className="w-4 h-4" /> : <ShieldAlert className="w-4 h-4" />}
           </div>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <h3 className="font-bold text-xs sm:text-sm text-white">
-                Milestone Delay &amp; Recovery Log
+                {isResolvedState ? 'Milestone Delay & Recovery Log (All Delays Resolved)' : 'Milestone Delay & Recovery Log'}
               </h3>
-              <span className="px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold bg-rose-600 text-white shadow-2xs">
-                +{effectiveDelayDays} {effectiveDelayDays === 1 ? 'Day' : 'Days'} Net Delay
-              </span>
+              {isResolvedState ? (
+                <span className="px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold bg-emerald-600 text-white shadow-2xs flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> 100% On Time (Recovered)
+                </span>
+              ) : (
+                <span className="px-2.5 py-0.5 rounded-md text-[11px] font-mono font-bold bg-rose-600 text-white shadow-2xs">
+                  +{effectiveDelayDays} {effectiveDelayDays === 1 ? 'Day' : 'Days'} Net Delay
+                </span>
+              )}
               {totalDaysRecovered > 0 && (
                 <span className="px-2.5 py-0.5 rounded-md text-[10px] font-mono font-bold bg-emerald-500/25 text-emerald-200 border border-emerald-400/30 flex items-center gap-1">
                   <Zap className="w-3 h-3 text-emerald-300" />
@@ -396,18 +431,23 @@ export const DelayAnalysisFlow: React.FC<DelayAnalysisFlowProps> = ({
               )}
             </div>
             <p className="text-[11px] text-slate-300 mt-0.5">
-              {delaySteps.length === 1 
-                ? `1 stage recorded a delay (+${totalDaysDelayed}d total)`
-                : `${delaySteps.length} stages recorded variance (+${totalDaysDelayed}d added${totalDaysRecovered > 0 ? `, -${totalDaysRecovered}d recovered` : ''})`
-              } • <span className="text-rose-300 font-medium">{isOpen ? 'Click to collapse' : 'Click dropdown to expand'}</span>
+              {isResolvedState 
+                ? `${delaySteps.length} historical stage event(s) recorded • Past delays recovered • `
+                : delaySteps.length === 1 
+                  ? `1 stage recorded a delay (+${totalDaysDelayed}d total) • `
+                  : `${delaySteps.length} stages recorded variance (+${totalDaysDelayed}d added${totalDaysRecovered > 0 ? `, -${totalDaysRecovered}d recovered` : ''}) • `
+              }
+              <span className={isResolvedState ? 'text-emerald-300 font-medium' : 'text-rose-300 font-medium'}>
+                {isOpen ? 'Click to collapse' : 'Click dropdown to expand historical log'}
+              </span>
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-center">
           <div className="text-right px-3 py-1.5 rounded-lg bg-white/10 border border-white/10">
-            <div className="text-[10px] uppercase font-mono text-slate-400">Revised Delivery Date</div>
-            <div className="text-xs font-bold font-mono text-rose-300">
+            <div className="text-[10px] uppercase font-mono text-slate-400">Target Delivery Date</div>
+            <div className={`text-xs font-bold font-mono ${isResolvedState ? 'text-emerald-300' : 'text-rose-300'}`}>
               {po.revisedDeliveryDate || po.committedDeliveryDate}
             </div>
           </div>
@@ -420,10 +460,14 @@ export const DelayAnalysisFlow: React.FC<DelayAnalysisFlowProps> = ({
           <div className="flex items-center justify-between text-xs text-slate-600 font-bold px-1">
             <span className="flex items-center gap-1.5 text-slate-800">
               <Clock className="w-4 h-4 text-slate-600" />
-              <span>Milestone Schedule Log:</span>
+              <span>Milestone Schedule &amp; Audit Log:</span>
             </span>
-            <span className="text-[10px] font-mono text-slate-500 font-normal">
-              Net Impact: +{effectiveDelayDays}d
+            <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full ${
+              isResolvedState 
+                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
+                : 'bg-rose-100 text-rose-800 border border-rose-200'
+            }`}>
+              {isResolvedState ? 'Net Impact: 0d (Fully Resolved)' : `Net Impact: +${effectiveDelayDays}d`}
             </span>
           </div>
 

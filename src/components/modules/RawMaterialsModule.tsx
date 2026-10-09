@@ -222,7 +222,7 @@ export const RawMaterialsModule: React.FC = () => {
                           {line.lineNumber}: {line.productName}
                         </div>
                         <div className="px-4 py-3 grid grid-cols-2 gap-3 border-b border-slate-100 text-[11px]">
-                          {line.milestones.filter(m => m.key === "raw_material" || m.key === "incoming_inspection").map(ms => {
+                          {line.milestones.filter(m => m.key === "material_receipt" || m.key === "raw_material").map(ms => {
                             const mIdx = line.milestones.findIndex(m => m.id === ms.id || m.key === ms.key);
                             const prevMs = mIdx > 0 ? line.milestones[mIdx - 1] : null;
                             const currVar = Math.max(0, typeof ms.varianceDays === 'number' ? ms.varianceDays : 0);

@@ -538,10 +538,44 @@ assert(delayFlow.rootDelayStep !== null, 'Root delay step identified');
 assert(delayFlow.rootDelayStep?.productLineName === 'High Pressure Valve 4" 1500#', `Delay step accurately attributes the causing product line (got "${delayFlow.rootDelayStep?.productLineName}")`);
 assert(delayFlow.rootDelayStep?.lineNumber === 'LINE-01', `Delay step accurately attributes the causing line number (got "${delayFlow.rootDelayStep?.lineNumber}")`);
 
+// ----------------------------------------------------------------------------
+// TEST GROUP 11: CSV Template & Import Validation with Stage 7 Procurement Columns
+// ----------------------------------------------------------------------------
+console.log('\n📋 GROUP 11: CSV Template & Import Validation with Stage 7 Procurement Columns');
+
+import { generateCsvTemplate, parseAndValidateCsv } from '../services/csvImportService.ts';
+
+const generatedCsv = generateCsvTemplate();
+assert(generatedCsv.includes('S7_MaterialOrderDate'), 'CSV template includes S7_MaterialOrderDate header');
+assert(generatedCsv.includes('S7_MaterialExpectedDate'), 'CSV template includes S7_MaterialExpectedDate header');
+assert(generatedCsv.includes('S7_MaterialReceipt_Actual'), 'CSV template includes S7_MaterialReceipt_Actual header');
+assert(generatedCsv.includes('S7_InspectionResult'), 'CSV template includes S7_InspectionResult header');
+
+const importResult = parseAndValidateCsv(generatedCsv, [], [], [], 'System Admin');
+assert(importResult.isValid === true, `Generated CSV template parses with valid status (errors: ${importResult.errors.join(', ')})`);
+assert(importResult.previewPOs.length === 3, `Imported exactly 3 sample POs from CSV (got ${importResult.previewPOs.length})`);
+
+const aramcoPO = importResult.previewPOs.find(p => p.poNumber === 'PO-2026-801');
+assert(aramcoPO !== undefined, 'Found imported Saudi Aramco PO');
+assert(aramcoPO!.productLines.length === 2, `Saudi Aramco PO contains 2 product lines (got ${aramcoPO?.productLines.length})`);
+
+const aramcoLine1 = aramcoPO!.productLines[0];
+assert(aramcoLine1.materials.length > 0, 'Line 1 has raw materials initialized');
+assert(aramcoLine1.materials[0].orderedDate === '2026-09-24', `Material order date matches CSV (got ${aramcoLine1.materials[0].orderedDate})`);
+assert(aramcoLine1.materials[0].expectedDate === '2026-10-08', `Material expected date matches CSV (got ${aramcoLine1.materials[0].expectedDate})`);
+assert(aramcoLine1.materials[0].receivedDate === '2026-10-06', `Material received date matches CSV (got ${aramcoLine1.materials[0].receivedDate})`);
+assert(aramcoLine1.materials[0].inspectionResult === 'Passed', `Material inspection result matches CSV (got ${aramcoLine1.materials[0].inspectionResult})`);
+
+const s7Ms = aramcoLine1.milestones.find(m => m.key === 'material_receipt');
+assert(s7Ms !== undefined, 'Found Stage 7 Material Receipt milestone');
+assert(s7Ms!.status === 'Completed', `Stage 7 milestone is marked Completed (got ${s7Ms?.status})`);
+assert(s7Ms!.actualEndDate === '2026-10-06', `Stage 7 actual end date is 2026-10-06 (got ${s7Ms?.actualEndDate})`);
+
 console.log('\n================================================================');
 const successRate = totalTests === 0 ? 0 : Math.round((passedTests / totalTests) * 100);
 console.log(`${passedTests === totalTests ? '🎉' : '⚠️'} TEST SUMMARY: ${passedTests}/${totalTests} TESTS PASSED (${successRate}% SUCCESS RATE)`);
 console.log('================================================================\n');
 if (passedTests !== totalTests) throw new Error(`${totalTests - passedTests} e2e test(s) failed`);
+
 
 

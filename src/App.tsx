@@ -12,7 +12,6 @@ import { CancelOrderModal } from "./components/modals/CancelOrderModal";
 import { DashboardModule } from "./components/modules/DashboardModule";
 import { OrderIntakeModule } from "./components/modules/OrderIntakeModule";
 import { ProductCatalogModule } from "./components/modules/ProductCatalogModule";
-import { RawMaterialsModule } from "./components/modules/RawMaterialsModule";
 import { DeliveryDispatchModule } from "./components/modules/DeliveryDispatchModule";
 import { MilestoneModuleView } from "./components/modules/MilestoneModuleView";
 import { BaselinePlanningModule } from "./components/modules/BaselinePlanningModule";
@@ -135,7 +134,15 @@ const MainAppContent: React.FC = () => {
           {activeModule === "6. Sub-Supplier PO" && (
             <MilestoneModuleView stageKey="sub_supplier_po" stageTitle="6. Sub-Supplier PO" stageOrder={6} responsibleRole="SCM (Sub-Supplier PO)" description="Issue sub-supplier purchase orders for specialized forging, casting, and raw material procurement." />
           )}
-          {activeModule === "7. Material Incoming Receipt" && <RawMaterialsModule />}
+          {activeModule === "7. Material Incoming Receipt" && (
+            <MilestoneModuleView 
+              stageKey="material_receipt" 
+              stageTitle="7. Material Incoming Receipt" 
+              stageOrder={7} 
+              responsibleRole="Stores (Material Receipt)" 
+              description="Record goods receipt notes (GRN), track raw material delivery dates, verify quality inspection clearance, and complete stage milestones." 
+            />
+          )}
           {activeModule === "8. Machining & Fabrication" && (
             <MilestoneModuleView stageKey="machining" stageTitle="8. Machining & Fabrication" stageOrder={8} responsibleRole="SCM / Planner (Machining)" description="Manage shop-floor machining operations, CNC tool routing, part completion, and fabrication schedules." />
           )}

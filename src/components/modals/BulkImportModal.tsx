@@ -118,7 +118,8 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
           row.poNumber.toLowerCase().includes(searchFilter.toLowerCase()) ||
           row.customerName.toLowerCase().includes(searchFilter.toLowerCase()) ||
           row.productName.toLowerCase().includes(searchFilter.toLowerCase()) ||
-          row.tagNumber.toLowerCase().includes(searchFilter.toLowerCase())
+          row.designType.toLowerCase().includes(searchFilter.toLowerCase()) ||
+          row.lineNumber.toLowerCase().includes(searchFilter.toLowerCase())
       )
     : [];
 
@@ -250,7 +251,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
                 rows={6}
                 value={csvText}
                 onChange={handlePasteChange}
-                placeholder="PO Number,Customer Name,Customer PO Date,Contractual Delivery Date,Tag Number,Description,Valve Type,Quantity,S1_CustomerPO_Actual,S2_PMBaseline_Actual..."
+                placeholder="PO Number,Customer Name,Customer PO Ref,Customer PO Date,Contractual Delivery Date,Product Name,Design Type,Quantity,S1_CustomerPO_Actual,S2_PMBaseline_Actual..."
                 className="w-full font-mono text-[11px] p-3 rounded-xl border border-slate-300 focus:outline-none focus:border-emerald-600 bg-slate-50"
               />
             </div>
@@ -345,8 +346,9 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
                       <tr>
                         <th className="py-2 px-3">PO Number</th>
                         <th className="py-2 px-3">Customer</th>
-                        <th className="py-2 px-3">Tag / Line</th>
-                        <th className="py-2 px-3">Type & Qty</th>
+                        <th className="py-2 px-3">Line Item & Product</th>
+                        <th className="py-2 px-3">Design Type</th>
+                        <th className="py-2 px-3">Qty</th>
                         <th className="py-2 px-3">PO Date</th>
                         <th className="py-2 px-3">Completed Stages</th>
                         <th className="py-2 px-3">Active Stage</th>
@@ -359,12 +361,19 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
                           <td className="py-2 px-3 font-mono font-bold text-slate-900">{row.poNumber}</td>
                           <td className="py-2 px-3 font-medium text-slate-800">{row.customerName}</td>
                           <td className="py-2 px-3 text-slate-700">
-                            <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-[10px] text-slate-700 mr-1">{row.tagNumber}</span>
+                            <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-[10px] text-slate-700 font-bold mr-1">{row.lineNumber}</span>
                             {row.productName}
                           </td>
-                          <td className="py-2 px-3 text-slate-600">
-                            {row.valveType} <span className="font-bold text-slate-900">({row.qty} pcs)</span>
+                          <td className="py-2 px-3">
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                              row.designType === 'New Design'
+                                ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                                : 'bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}>
+                              {row.designType}
+                            </span>
                           </td>
+                          <td className="py-2 px-3 font-bold font-mono text-slate-900">{row.qty} pcs</td>
                           <td className="py-2 px-3 font-mono text-slate-600">{row.customerPoDate}</td>
                           <td className="py-2 px-3">
                             <div className="flex items-center gap-2">

@@ -873,9 +873,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                     <div className="p-4 sm:p-5 space-y-4 bg-white">
                       
                       {/* Bold Root Cause Delay & Multi-Stage Waterfall Breakdown */}
-                      {(hasDelayedProducts || po.status === 'Delayed' || po.productLines.some(l => (l.overallVarianceDays || 0) > 0)) && (
-                        <DelayAnalysisFlow po={po} className="border-rose-200 shadow-sm" />
-                      )}
+                      <DelayAnalysisFlow po={po} className="shadow-sm" />
                       
                       {/* Sub-header inside card: Toggle between Active Lines only vs All Lines */}
                       {group.completedLines > 0 && activeLines.length > 0 && (

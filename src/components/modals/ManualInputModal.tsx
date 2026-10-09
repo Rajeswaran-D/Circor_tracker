@@ -32,8 +32,17 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
   // Floor for completion date must only be an actual event (actual start or previous actual end)
   const currentMsStart = milestone.actualStartDate || previousMsActualEnd;
 
+  const isMaterialStage = milestone.key === 'material_receipt';
+  const criticalMat = productLine.materials?.find(m => m.isCriticalPath) || productLine.materials?.[0];
+  const matLeadTime = criticalMat?.leadTimeDays || milestone.committedDurationDays || 14;
+
+  const defaultOrderDate = criticalMat?.orderedDate || previousMsActualEnd || milestone.actualStartDate || milestone.committedBaselineStartDate || po.poDate || todayStr;
+  const defaultExpectedDate = criticalMat?.expectedDate || addDays(defaultOrderDate, matLeadTime);
+
   const rawDefault = eventType === 'start'
     ? (milestone.actualStartDate || previousMsActualEnd || prevEffectiveEnd || milestone.committedBaselineStartDate || todayStr)
+    : isMaterialStage
+    ? (milestone.actualEndDate || criticalMat?.receivedDate || defaultExpectedDate || todayStr)
     : (milestone.actualEndDate || milestone.actualStartDate || previousMsActualEnd || todayStr);
 
   const defaultInitialDate = rawDefault;
@@ -42,6 +51,11 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
   const [backdateReason, setBackdateReason] = useState<string>('');
   const [customDelayReason, setCustomDelayReason] = useState<string>('');
   
+  // Material Receipt Specific
+  const [orderedDate, setOrderedDate] = useState<string>(defaultOrderDate);
+  const [expectedDate, setExpectedDate] = useState<string>(defaultExpectedDate);
+  const [inspectionResult, setInspectionResult] = useState<'Passed' | 'Rejected' | 'Pending'>(criticalMat?.inspectionResult || 'Passed');
+
   // Design Specific
   const [approvalRef, setApprovalRef] = useState<string>('');
   const [drawingNo, setDrawingNo] = useState<string>('');
@@ -53,10 +67,25 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
     setEventDate(defaultInitialDate);
     setBackdateReason('');
     setCustomDelayReason('');
+    setOrderedDate(defaultOrderDate);
+    setExpectedDate(defaultExpectedDate);
+    setInspectionResult(criticalMat?.inspectionResult || 'Passed');
     setErrorMessage(null);
-  }, [isOpen, milestone.id, eventType, defaultInitialDate]);
+  }, [isOpen, milestone.id, eventType, defaultInitialDate, defaultOrderDate, defaultExpectedDate]);
 
   if (!isOpen) return null;
+
+  const handleOrderDateChange = (newOrderDate: string) => {
+    setOrderedDate(newOrderDate);
+    if (newOrderDate) {
+      const newExpected = addDays(newOrderDate, matLeadTime);
+      setExpectedDate(newExpected);
+      // If completing Stage 7 and received date is default, sync with expected date
+      if (eventType === 'complete' && (!eventDate || eventDate === expectedDate || eventDate === defaultExpectedDate)) {
+        setEventDate(newExpected);
+      }
+    }
+  };
 
   const isRoleAuthorized = isMilestoneOwnedByRole(milestone.key, activeRole);
   const isPreviousDone = !previousMs || previousMs.status === 'Completed' || Boolean(previousMs.actualEndDate) || previousMs.completionPct === 100;
@@ -83,20 +112,24 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
       ? prevEffectiveEnd
       : (baselineStart || '');
   } else {
-    totalDelay = (baselineEnd && eventDate > baselineEnd)
+    // For Material Receipt, baseline target is expectedDate or baselineEnd
+    const effectiveTargetEnd = isMaterialStage && expectedDate ? expectedDate : baselineEnd;
+    totalDelay = (effectiveTargetEnd && eventDate > effectiveTargetEnd)
+      ? getDaysDifference(effectiveTargetEnd, eventDate)
+      : (baselineEnd && eventDate > baselineEnd)
       ? getDaysDifference(baselineEnd, eventDate)
       : 0;
-    const effectiveStart = milestone.actualStartDate || ((baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart) ? prevEffectiveEnd : baselineStart);
+    const effectiveStart = milestone.actualStartDate || orderedDate || ((baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart) ? prevEffectiveEnd : baselineStart);
     const startDelay = (baselineStart && effectiveStart && effectiveStart > baselineStart)
       ? getDaysDifference(baselineStart, effectiveStart)
       : 0;
     inheritedDelayDays = Math.min(totalDelay, startDelay);
     newDelayFormed = Math.max(0, totalDelay - inheritedDelayDays);
 
-    revisedTarget = startDelay > 0 && effectiveStart ? addDays(effectiveStart, baselineDuration) : (baselineEnd || '');
+    revisedTarget = startDelay > 0 && effectiveStart ? addDays(effectiveStart, baselineDuration) : (effectiveTargetEnd || baselineEnd || '');
   }
 
-  const targetRevisedStart = milestone.actualStartDate || ((baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart) ? prevEffectiveEnd : (baselineStart || ''));
+  const targetRevisedStart = milestone.actualStartDate || orderedDate || ((baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart) ? prevEffectiveEnd : (baselineStart || ''));
   const precedingStartDelay = (baselineStart && targetRevisedStart && targetRevisedStart > baselineStart)
     ? getDaysDifference(baselineStart, targetRevisedStart)
     : 0;
@@ -163,7 +196,11 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
       approvalRef: approvalRef || undefined,
       drawingNo: drawingNo || undefined,
       ecnNo: ecnNo || undefined,
-      delayReason: effectiveDelayReason
+      delayReason: effectiveDelayReason,
+      orderedDate: isMaterialStage ? orderedDate : undefined,
+      expectedDate: isMaterialStage ? expectedDate : undefined,
+      receivedDate: isMaterialStage && eventType === 'complete' ? eventDate : undefined,
+      inspectionResult: isMaterialStage ? inspectionResult : undefined
     });
 
     if (!res.success) {
@@ -253,17 +290,79 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
             </div>
           </div>
 
+          {/* Raw Material Procurement Schedule (Stage 7 Specific) */}
+          {isMaterialStage && (
+            <div className="p-3.5 bg-emerald-50/60 border border-emerald-200 rounded-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="font-bold text-emerald-950 text-xs">
+                  Raw Material Procurement Schedule
+                </div>
+                <span className="text-[10px] font-mono text-emerald-800 bg-white px-2 py-0.5 rounded border border-emerald-300 font-bold">
+                  Lead Time: {matLeadTime}d ({criticalMat?.itemCode || 'Critical Material'})
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-bold text-slate-700">
+                      Material Order Placement Date
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => handleOrderDateChange(todayStr)}
+                      className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer"
+                    >
+                      Today
+                    </button>
+                  </div>
+                  <input
+                    type="date"
+                    value={orderedDate}
+                    onChange={(e) => handleOrderDateChange(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-medium focus:outline-none focus:border-emerald-600"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-0.5">PO issued to sub-supplier / casting mill</p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-bold text-slate-700">
+                      Expected Delivery Date (Calculated)
+                    </label>
+                    <span className="text-[10px] font-mono text-slate-500">+{matLeadTime}d Lead</span>
+                  </div>
+                  <input
+                    type="date"
+                    value={expectedDate}
+                    onChange={(e) => setExpectedDate(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-medium focus:outline-none focus:border-emerald-600"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-0.5">Target arrival date as per lead time</p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Event Date (Primary Input) */}
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="block text-slate-700 font-semibold">
-                {eventType === 'start' ? (milestone.actualStartDate ? 'Re-enter Start Date' : 'Actual Start Date') : 'Actual Completion Date'} <span className="text-rose-600">*</span>
+                {isMaterialStage 
+                  ? (eventType === 'start' ? 'Stage 7 Start Date (Order Placed)' : 'Actual Material Received Date (GRN Date)')
+                  : eventType === 'start' 
+                  ? (milestone.actualStartDate ? 'Re-enter Start Date' : 'Actual Start Date') 
+                  : 'Actual Completion Date'} <span className="text-rose-600">*</span>
               </label>
-              {eventType === 'start' && milestone.actualStartDate && (
+              {isMaterialStage && eventType === 'complete' ? (
+                <span className="text-[10px] text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded font-mono font-bold">
+                  Default: {expectedDate || defaultExpectedDate} (Changeable)
+                </span>
+              ) : eventType === 'start' && milestone.actualStartDate ? (
                 <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded font-mono">
                   Current: {milestone.actualStartDate}
                 </span>
-              )}
+              ) : null}
             </div>
             <input
               type="date"
@@ -271,7 +370,30 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
               onChange={(e) => setEventDate(e.target.value)}
               className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:border-emerald-600 font-medium font-mono"
             />
+            {isMaterialStage && eventType === 'complete' && (
+              <p className="text-[11px] text-slate-500 mt-1">
+                Pre-filled with the calculated expected delivery date. Change this date if the material arrived earlier or later (late receival will calculate delay automatically).
+              </p>
+            )}
           </div>
+
+          {/* Material Receipt Incoming Inspection (Stage 7 Specific) */}
+          {isMaterialStage && eventType === 'complete' && (
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+              <label className="block text-[11px] font-bold text-slate-700">
+                Incoming Inspection Result <span className="text-rose-600">*</span>
+              </label>
+              <select
+                value={inspectionResult}
+                onChange={(e) => setInspectionResult(e.target.value as any)}
+                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-semibold focus:outline-none focus:border-emerald-600"
+              >
+                <option value="Passed">Passed (Approved for Machining)</option>
+                <option value="Pending">Pending (Inspection in progress)</option>
+                <option value="Rejected">Rejected (Non-conformance raised)</option>
+              </select>
+            </div>
+          )}
 
           {/* Status feedback & Delay Calculation */}
           {totalDelay <= 0 ? (
