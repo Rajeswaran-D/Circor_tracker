@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useApp } from "../../context/AppContext";
 import { CheckCircle2, ChevronDown, ChevronUp, Lock, AlertTriangle, Calendar } from "lucide-react";
 import { getPOManufacturingStatus } from "../../utils/statusUtils";
-import { todayLocal, addDays } from "../../services/calculationEngine";
+import { todayLocal, addDays, getDaysDifference } from "../../services/calculationEngine";
 
 import { isMilestoneOwnedByRole } from "../../types";
 
@@ -253,8 +253,8 @@ export const RawMaterialsModule: React.FC = () => {
                                 <th className="py-3 px-4">Item Code</th>
                                 <th className="py-3 px-4">Description</th>
                                 <th className="py-3 px-4">Lead Time</th>
-                                <th className="py-3 px-4">Order Date</th>
-                                <th className="py-3 px-4">Expected</th>
+                                <th className="py-3 px-4">Order Date (Planned / Revised)</th>
+                                <th className="py-3 px-4">Expected Delivery (Planned / Revised)</th>
                                 <th className="py-3 px-4">Received / GRN</th>
                                 <th className="py-3 px-4 text-center">Inspection</th>
                                 <th className="py-3 px-4 text-right">Action</th>
@@ -269,6 +269,8 @@ export const RawMaterialsModule: React.FC = () => {
 
                                 const displayOrderDate = mat.orderedDate || baselineOrderDate;
                                 const displayExpectedDate = mat.expectedDate || baselineExpectedDate;
+                                const orderShiftDays = mat.orderedDate ? getDaysDifference(baselineOrderDate, mat.orderedDate) : 0;
+                                const delivShiftDays = mat.expectedDate ? getDaysDifference(baselineExpectedDate, mat.expectedDate) : 0;
 
                                 return (
                                   <tr key={mat.id} className="hover:bg-slate-50 transition-colors">
@@ -278,15 +280,41 @@ export const RawMaterialsModule: React.FC = () => {
                                     </td>
                                     <td className="py-3 px-4 text-slate-700">{mat.description}</td>
                                     <td className="py-3 px-4 font-mono text-slate-600">{mat.leadTimeDays}d</td>
-                                    <td className="py-3 px-4 font-mono">
-                                      <span className={mat.orderedDate ? 'text-blue-700 font-bold' : 'text-slate-700'}>
-                                        {displayOrderDate}
-                                      </span>
+                                    <td className="py-3 px-4">
+                                      <div>
+                                        <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
+                                          <span>Plan:</span>
+                                          <span className="font-semibold text-slate-700">{baselineOrderDate}</span>
+                                        </div>
+                                        <div className="font-mono text-xs font-bold text-slate-900 flex items-center gap-1 mt-0.5">
+                                          <span className={mat.orderedDate ? 'text-blue-700' : 'text-slate-800'}>
+                                            {displayOrderDate}
+                                          </span>
+                                          {orderShiftDays > 0 && (
+                                            <span className="text-[9px] px-1 py-0.2 bg-amber-100 text-amber-800 rounded font-bold">
+                                              +{orderShiftDays}d
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
                                     </td>
-                                    <td className="py-3 px-4 font-mono">
-                                      <span className={mat.expectedDate ? 'text-slate-900 font-bold' : 'text-slate-700'}>
-                                        {displayExpectedDate}
-                                      </span>
+                                    <td className="py-3 px-4">
+                                      <div>
+                                        <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
+                                          <span>Plan:</span>
+                                          <span className="font-semibold text-slate-700">{baselineExpectedDate}</span>
+                                        </div>
+                                        <div className="font-mono text-xs font-bold flex items-center gap-1 mt-0.5">
+                                          <span className={delivShiftDays > 0 ? 'text-rose-700' : 'text-emerald-800'}>
+                                            {displayExpectedDate}
+                                          </span>
+                                          {delivShiftDays > 0 && (
+                                            <span className="text-[9px] px-1 py-0.2 bg-rose-100 text-rose-800 rounded font-bold">
+                                              +{delivShiftDays}d late
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
                                     </td>
                                     <td className="py-3 px-4">
                                       {mat.receivedDate ? (
@@ -333,75 +361,146 @@ export const RawMaterialsModule: React.FC = () => {
                                         </button>
                                       )}
                                     </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                )}
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        )}
 
-                {editingMat && line.materials.some(m => m.id === editingMat.matId) && (
-                  <div className="border-t border-slate-200 p-4 bg-emerald-50/50 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-bold text-slate-800">Update Material Status & Dates</p>
-                      <span className="text-[10px] text-slate-500 font-mono">Select dates without restriction</span>
-                    </div>
+                        {editingMat && line.materials.some(m => m.id === editingMat.matId) && (() => {
+                          const currentMat = line.materials.find(m => m.id === editingMat.matId)!;
+                          const receiptMs = line.milestones.find(m => m.key === 'material_receipt' || m.key === 'raw_material');
+                          const baselineOrderDate = receiptMs?.committedBaselineStartDate || po.poDate;
+                          const baselineExpectedDate = addDays(baselineOrderDate, currentMat.leadTimeDays || 14);
+                          const activeOrderShift = orderedDate ? getDaysDifference(baselineOrderDate, orderedDate) : 0;
+                          const activeDelivShift = expectedDate ? getDaysDifference(baselineExpectedDate, expectedDate) : 0;
 
-                    {errorMsg && (
-                      <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2 font-medium">
-                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                        <span>{errorMsg}</span>
-                      </div>
-                    )}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="text-[10px] font-bold text-slate-700">Order Placement Date</label>
-                          <button type="button" onClick={() => setOrderedDate(today)} className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer">Today</button>
-                        </div>
-                        <input type="date" value={orderedDate} onChange={e => setOrderedDate(e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:outline-none focus:border-emerald-600 bg-white shadow-2xs" />
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="text-[10px] font-bold text-slate-700">Expected Delivery Date</label>
-                          <button type="button" onClick={() => setExpectedDate(today)} className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer">Today</button>
-                        </div>
-                        <input type="date" value={expectedDate} onChange={e => setExpectedDate(e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:outline-none focus:border-emerald-600 bg-white shadow-2xs" />
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="text-[10px] font-bold text-slate-700">Actual Received Date (GRN)</label>
-                          <div className="flex gap-2">
-                            <button type="button" onClick={() => setReceivedDate(today)} className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer">Today</button>
-                            <button type="button" onClick={() => setReceivedDate("")} className="text-[10px] text-slate-400 font-bold hover:underline cursor-pointer">Clear</button>
-                          </div>
-                        </div>
-                        <input type="date" value={receivedDate} onChange={e => setReceivedDate(e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:outline-none focus:border-emerald-600 bg-white shadow-2xs" />
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between pt-2">
-                      <div className="flex items-center gap-2">
-                        <label className="text-[10px] font-bold text-slate-700">Inspection Result:</label>
-                        <select value={inspectionResult} onChange={e => setInspectionResult(e.target.value as any)}
-                          className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold focus:outline-none focus:border-emerald-600 bg-white cursor-pointer shadow-2xs">
-                          <option value="Pending">Pending</option>
-                          <option value="Passed">Passed (Accept GRN)</option>
-                          <option value="Rejected">Rejected (NC Triggered)</option>
-                        </select>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button type="button" onClick={() => setEditingMat(null)} className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 font-medium cursor-pointer">Cancel</button>
-                        <button onClick={() => handleSave(editingMat.poId, editingMat.lineId, editingMat.matId, "MATERIAL-UPDATE")}
-                          className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shadow-xs">
-                          Save Material Update
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                          return (
+                            <div className="border-t border-slate-200 p-4 bg-emerald-50/50 space-y-4">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <p className="text-xs font-bold text-slate-800">Update Material Status &amp; Delivery Schedule</p>
+                                  <p className="text-[11px] text-slate-500">Item: <strong className="text-slate-800">{currentMat.itemCode}</strong> — {currentMat.description} (Lead time: {currentMat.leadTimeDays} days)</p>
+                                </div>
+                                <span className="text-[10px] text-emerald-800 font-mono font-bold bg-emerald-100 px-2.5 py-0.5 rounded border border-emerald-200">
+                                  Stage 7 Planned Window: {receiptMs?.committedBaselineStartDate || po.poDate} &rarr; {receiptMs?.committedBaselineEndDate || po.committedDeliveryDate}
+                                </span>
+                              </div>
+
+                              {/* Planned vs Revised Comparison Card */}
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white p-3.5 rounded-xl border border-emerald-200 text-xs shadow-2xs">
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Order Placement Timeline</span>
+                                  <div className="flex items-center justify-between text-[11px] font-mono">
+                                    <span className="text-slate-500">Planned (Baseline):</span>
+                                    <strong className="text-slate-800">{baselineOrderDate}</strong>
+                                  </div>
+                                  <div className="flex items-center justify-between text-[11px] font-mono">
+                                    <span className="text-slate-500">Revised / Selected:</span>
+                                    <strong className={activeOrderShift > 0 ? "text-amber-800 font-bold" : "text-blue-800"}>
+                                      {orderedDate || baselineOrderDate} {activeOrderShift > 0 ? `(+${activeOrderShift}d shift)` : ''}
+                                    </strong>
+                                  </div>
+                                </div>
+
+                                <div className="space-y-1 sm:border-l sm:border-slate-200 sm:pl-3">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Material Delivery Timeline</span>
+                                  <div className="flex items-center justify-between text-[11px] font-mono">
+                                    <span className="text-slate-500">Planned (Baseline):</span>
+                                    <strong className="text-slate-800">{baselineExpectedDate}</strong>
+                                  </div>
+                                  <div className="flex items-center justify-between text-[11px] font-mono">
+                                    <span className="text-slate-500">Revised / Expected:</span>
+                                    <strong className={activeDelivShift > 0 ? "text-rose-700 font-bold" : "text-emerald-800 font-bold"}>
+                                      {expectedDate || baselineExpectedDate} {activeDelivShift > 0 ? `(+${activeDelivShift}d delay)` : ''}
+                                    </strong>
+                                  </div>
+                                </div>
+
+                                <div className="space-y-1 sm:border-l sm:border-slate-200 sm:pl-3">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Overall PO Delivery Schedule</span>
+                                  <div className="flex items-center justify-between text-[11px] font-mono">
+                                    <span className="text-slate-500">Planned PO Delivery:</span>
+                                    <strong className="text-slate-800">{po.committedDeliveryDate}</strong>
+                                  </div>
+                                  <div className="flex items-center justify-between text-[11px] font-mono">
+                                    <span className="text-slate-500">Revised PO Delivery:</span>
+                                    <strong className={po.revisedDeliveryDate ? "text-rose-700 font-bold" : "text-emerald-800"}>
+                                      {po.revisedDeliveryDate || po.committedDeliveryDate}
+                                    </strong>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {errorMsg && (
+                                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2 font-medium">
+                                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                                  <span>{errorMsg}</span>
+                                </div>
+                              )}
+
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <label className="text-[10px] font-bold text-slate-700">Order Placement Date</label>
+                                    <button type="button" onClick={() => setOrderedDate(today)} className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer">Today</button>
+                                  </div>
+                                  <input type="date" value={orderedDate} onChange={e => setOrderedDate(e.target.value)}
+                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:outline-none focus:border-emerald-600 bg-white shadow-2xs" />
+                                  <div className="text-[10px] text-slate-500 font-mono mt-1 flex justify-between">
+                                    <span>Plan: <strong>{baselineOrderDate}</strong></span>
+                                    <span>Revised: <strong className="text-blue-700">{orderedDate || baselineOrderDate}</strong></span>
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <label className="text-[10px] font-bold text-slate-700">Expected Delivery Date</label>
+                                    <button type="button" onClick={() => setExpectedDate(today)} className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer">Today</button>
+                                  </div>
+                                  <input type="date" value={expectedDate} onChange={e => setExpectedDate(e.target.value)}
+                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:outline-none focus:border-emerald-600 bg-white shadow-2xs" />
+                                  <div className="text-[10px] text-slate-500 font-mono mt-1 flex justify-between">
+                                    <span>Plan: <strong>{baselineExpectedDate}</strong></span>
+                                    <span>Revised: <strong className={activeDelivShift > 0 ? "text-rose-700" : "text-emerald-800"}>{expectedDate || baselineExpectedDate}</strong></span>
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <label className="text-[10px] font-bold text-slate-700">Actual Received Date (GRN)</label>
+                                    <div className="flex gap-2">
+                                      <button type="button" onClick={() => setReceivedDate(today)} className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer">Today</button>
+                                      <button type="button" onClick={() => setReceivedDate("")} className="text-[10px] text-slate-400 font-bold hover:underline cursor-pointer">Clear</button>
+                                    </div>
+                                  </div>
+                                  <input type="date" value={receivedDate} onChange={e => setReceivedDate(e.target.value)}
+                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:outline-none focus:border-emerald-600 bg-white shadow-2xs" />
+                                  <div className="text-[10px] text-slate-500 font-mono mt-1">
+                                    <span>Target Planned: <strong>{baselineExpectedDate}</strong></span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between pt-2">
+                                <div className="flex items-center gap-2">
+                                  <label className="text-[10px] font-bold text-slate-700">Inspection Result:</label>
+                                  <select value={inspectionResult} onChange={e => setInspectionResult(e.target.value as any)}
+                                    className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold focus:outline-none focus:border-emerald-600 bg-white cursor-pointer shadow-2xs">
+                                    <option value="Pending">Pending</option>
+                                    <option value="Passed">Passed (Accept GRN)</option>
+                                    <option value="Rejected">Rejected (NC Triggered)</option>
+                                  </select>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button type="button" onClick={() => setEditingMat(null)} className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 font-medium cursor-pointer">Cancel</button>
+                                  <button onClick={() => handleSave(editingMat.poId, editingMat.lineId, editingMat.matId, "MATERIAL-UPDATE")}
+                                    className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shadow-xs">
+                                    Save Material Update
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     ))}
                   </div>

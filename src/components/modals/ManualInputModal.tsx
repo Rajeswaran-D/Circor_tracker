@@ -28,11 +28,7 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
   const previousMs = msIndex > 0 ? productLine.milestones[msIndex - 1] : undefined;
   // Use actualEndDate as the authoritative previous end — this is what the chain must start from
   const previousMsActualEnd = previousMs?.actualEndDate;
-  const previousMsEnd = previousMsActualEnd
-    || (previousMs ? (previousMs.forecastEndDate || previousMs.committedBaselineEndDate) : undefined);
   const prevEffectiveEnd = previousMsActualEnd || previousMs?.forecastEndDate;
-  // Minimum selectable date for start events: must be >= previous milestone's actual end date if available
-  const startMinDate = previousMsActualEnd || milestone.committedBaselineStartDate;
   // Floor for completion date must only be an actual event (actual start or previous actual end)
   const currentMsStart = milestone.actualStartDate || previousMsActualEnd;
 

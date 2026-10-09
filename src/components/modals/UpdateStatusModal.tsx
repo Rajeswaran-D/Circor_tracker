@@ -127,17 +127,6 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
     ? (currentMs.actualStartDate || previousMsActualEnd)
     : undefined;
 
-  // Date-picker range. The floor must NEVER exceed max (today) or the picker
-  // becomes unusable — so forecast/baseline fallbacks that land in the future
-  // are dropped instead of being used as a minimum.
-  // - In Progress (start): floor = previous milestone's ACTUAL end (the chain
-  //   anchor). No arbitrary day-cap: backdated starts remain possible.
-  // - In Progress (start): floor = previous milestone's end date.
-  // - Completed: floor = the milestone's own start date or previous milestone's end date.
-  const inputMin = statusAction === 'In Progress'
-    ? (previousMsEnd || undefined)
-    : (currentMs?.actualStartDate || previousMsEnd || undefined);
-
   const handleLineSelect = (lineId: string) => {
     setSelectedLineId(lineId);
     setErrorMsg('');

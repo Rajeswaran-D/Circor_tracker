@@ -244,16 +244,23 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
           {/* PO Parameters */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50/60 p-4 rounded-xl border border-slate-200">
             <div>
-              <label className="block font-bold text-slate-700 mb-1 text-[11px]">
-                Baseline Planned Start Date
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-bold text-slate-700 text-[11px]">
+                  Baseline Planned Start Date
+                </label>
+                <span className="text-[9px] font-mono text-cyan-800 font-semibold bg-cyan-50 px-1.5 py-0.2 rounded border border-cyan-200">Past 1 Wk &amp; Future</span>
+              </div>
               <input
                 type="date"
+                min={addDays(today, -7)}
                 value={baselineStartDate}
                 disabled={flowAlreadyStarted}
                 onChange={(e) => setBaselineStartDate(e.target.value)}
                 className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono text-slate-800 focus:outline-none focus:border-cyan-600 font-bold"
               />
+              <p className="text-[9px] text-slate-500 mt-1 font-mono">
+                Enabled: Past 1 week ({addDays(today, -7)}), today, &amp; future dates
+              </p>
             </div>
 
             <div>

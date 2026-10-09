@@ -254,11 +254,11 @@ export const SystemTestRunner: React.FC<SystemTestRunnerProps> = ({ isOpen, onCl
 
       // ── T-15: Only PM approves baseline ──────────────────────────────────
       const t15s = performance.now();
-      const pmApprove = ROLE_PERMISSIONS['Project Management'].canApproveBaseline;
-      const slotsNoApprove = Object.entries(ROLE_PERMISSIONS).filter(([r]) => r !== 'Project Management').every(([, p]) => !p.canApproveBaseline);
+      const pmApprove = ROLE_PERMISSIONS['Project Management'].canApproveBaseline && ROLE_PERMISSIONS['Project Manager (PM Baseline)'].canApproveBaseline;
+      const slotsNoApprove = Object.entries(ROLE_PERMISSIONS).filter(([r]) => r !== 'Project Management' && r !== 'Project Manager (PM Baseline)').every(([, p]) => !p.canApproveBaseline);
       testList.push({ id: 't-15', name: 'Only Project Management Can Approve Baselines', category: 'Permissions',
         status: (pmApprove && slotsNoApprove) ? 'PASSED' : 'FAILED',
-        message: (pmApprove && slotsNoApprove) ? 'PM approved; all 14 slot roles denied baseline approval.' : `FAILED: pm=${pmApprove}, slotsOk=${slotsNoApprove}`,
+        message: (pmApprove && slotsNoApprove) ? 'PM & PM Baseline approved; all other slot roles denied baseline approval.' : `FAILED: pm=${pmApprove}, slotsOk=${slotsNoApprove}`,
         executionTimeMs: Math.round(performance.now() - t15s) });
 
       // ── T-16: Machining (Slot 8) blocked until Material Receipt (Slot 7) ─

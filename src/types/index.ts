@@ -150,6 +150,7 @@ export interface RolePermissions {
   canEditProcurement: boolean;
   canEditProduction: boolean;
   canEditDispatch: boolean;
+  canCloseOrder: boolean;
   allowedMilestones: 'ALL' | string[];
 }
 
@@ -166,6 +167,7 @@ const defaultSlotPerms: RolePermissions = {
   canEditProcurement: false,
   canEditProduction: false,
   canEditDispatch: false,
+  canCloseOrder: false,
   allowedMilestones: []
 };
 
@@ -184,12 +186,13 @@ export const ROLE_PERMISSIONS: Record<Role, RolePermissions> = {
     canEditProcurement: true,
     canEditProduction: true,
     canEditDispatch: true,
+    canCloseOrder: true,
     allowedMilestones: 'ALL'
   },
 
   // 14 Dedicated Milestone Slots with Isolated Permissions
   'Sales / AE (Customer PO)': { ...defaultSlotPerms, canCreatePO: true, canCreateProductLines: true, canEditPOHeader: true, allowedMilestones: ['po_from_customer'] },
-  'Project Manager (PM Baseline)': { ...defaultSlotPerms, canGenerateBaseline: true, canApproveBaseline: true, canEditPOHeader: true, allowedMilestones: ['pm_baseline', 'baseline_review'] },
+  'Project Manager (PM Baseline)': { ...defaultSlotPerms, canGenerateBaseline: true, canApproveBaseline: true, canEditPOHeader: true, canCloseOrder: true, allowedMilestones: ['pm_baseline', 'baseline_review'] },
   'AE (CORB Release)': { ...defaultSlotPerms, allowedMilestones: ['corb_release'] },
   'DE (BOM Release)': { ...defaultSlotPerms, allowedMilestones: ['bom_release'] },
   'Planner (WO Release)': { ...defaultSlotPerms, canEditProduction: true, allowedMilestones: ['wo_release'] },
@@ -367,4 +370,7 @@ export interface SystemConfig {
   delayedThresholdDays: number; // e.g. 7 days
   offlineSyncQueue: any[];
   enablePushNotifications: boolean;
+  enableEmailAlerts?: boolean;
 }
+
+

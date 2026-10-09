@@ -72,7 +72,7 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
     (line.milestones || []).length > 0 && line.milestones.every(m => m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100)
   );
 
-  const canClosePO = allMilestonesComplete || activeRole === 'Project Management' || activeRole === 'Project Manager (PM Baseline)' || activeRole === 'Stores (Shipment)';
+  const canClosePO = activeRole === 'Project Management' || activeRole === 'Project Manager (PM Baseline)';
   const canReviseBaseline = activeRole === 'Project Manager (PM Baseline)' || activeRole === 'Project Management';
   const isAdmin = activeRole === 'Project Management';
   const hasPendingCancel = po.cancellationRequest?.status === 'Pending';

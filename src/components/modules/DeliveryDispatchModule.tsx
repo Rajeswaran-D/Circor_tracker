@@ -264,6 +264,24 @@ export const DeliveryDispatchModule: React.FC<DeliveryModuleProps> = ({ onOpenMa
                       const allMilestonesComplete = po.productLines.length > 0 && po.productLines.every(line =>
                         line.milestones.every(m => m.status === "Completed" || Boolean(m.actualEndDate) || m.completionPct === 100)
                       );
+                      const canCloseRole = activeRole === 'Project Management' || activeRole === 'Project Manager (PM Baseline)';
+
+                      if (!canCloseRole) {
+                        return allMilestonesComplete ? (
+                          <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-4 flex items-center justify-between text-xs">
+                            <div className="flex items-center gap-2.5">
+                              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                              <div>
+                                <div className="font-bold text-xs text-emerald-950">All 14 Stages & Shipment Complete</div>
+                                <div className="text-[11px] text-emerald-700">Awaiting Project Manager (PM Baseline) to formally verify and close this order.</div>
+                              </div>
+                            </div>
+                            <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 text-[10px] font-bold font-mono rounded-lg border border-emerald-300 shrink-0">
+                              PM Baseline Sign-Off Required
+                            </span>
+                          </div>
+                        ) : null;
+                      }
 
                       return (
                         <div className={`border rounded-xl p-5 space-y-3 ${allMilestonesComplete ? "bg-emerald-50/60 border-emerald-200" : "bg-slate-100 border-slate-200"}`}>

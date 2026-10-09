@@ -815,8 +815,8 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                         )}
                       </div>
 
-                      {/* CLOSE ORDER BUTTON FOR FINISHED MULTI-PRODUCT ORDERS */}
-                      {po.productLines.length > 0 && po.productLines.every(l => l.milestones.every(m => m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100)) && !po.isClosed && (
+                      {/* CLOSE ORDER BUTTON FOR FINISHED MULTI-PRODUCT ORDERS (PM / PM Baseline only) */}
+                      {(activeRole === 'Project Management' || activeRole === 'Project Manager (PM Baseline)') && po.productLines.length > 0 && po.productLines.every(l => l.milestones.every(m => m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100)) && !po.isClosed && (
                         <button
                           onClick={() => setClosingPO(po)}
                           className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-md flex items-center gap-1.5 animate-pulse"
@@ -862,7 +862,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                       <div className="flex items-center gap-2">
                         <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
                         <span>
-                          <strong className="font-bold text-rose-900">Multi-Product Delay Catch:</strong> Delay is isolated to <strong className="text-rose-900 underline">{delayedProductNames.join(', ')}</strong>. The remaining {group.totalLines - group.delayedLines} product line(s) remain on track.
+                          <strong className="font-bold text-rose-900">Multi-Product Delay:</strong> <strong className="text-rose-900 underline">{delayedProductNames.join(', ')}</strong>
                         </span>
                       </div>
                     </div>
@@ -1165,7 +1165,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                                     </label>
                                     <input
                                       type="date"
-                                      min={prevMilestone?.actualEndDate || prevMilestone?.forecastEndDate || undefined}
+                                      min={stageOrder === 1 ? addDays(todayStr, -7) : (prevMilestone?.actualEndDate || prevMilestone?.forecastEndDate || undefined)}
                                       value={formData.startDate}
                                       onChange={e => setFormData(prev => ({ ...prev, startDate: e.target.value }))}
                                       className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"

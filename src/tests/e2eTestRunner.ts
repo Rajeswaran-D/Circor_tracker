@@ -5,6 +5,7 @@ import {
   validateEventDate
 } from '../services/calculationEngine.ts';
 import { getPOManufacturingStatus } from '../utils/statusUtils.ts';
+import { extractDelayFlow } from '../components/common/DelayAnalysisFlow.tsx';
 import type { PurchaseOrder, ProductLine, Milestone } from '../types/index.ts';
 
 const cascadeNextMilestoneStart = (
@@ -460,10 +461,87 @@ const closedDelayedSummary = getPOManufacturingStatus(closedDelayedPO);
 assert(closedDelayedSummary.delayDays === 3, `Closed delayed order accurately preserves delayDays of 3d (got ${closedDelayedSummary.delayDays}d)`);
 assert(closedDelayedSummary.timelineValidationStatus === 'CLOSED', 'Timeline status is CLOSED');
 assert(closedDelayedSummary.timelineMessage.includes('+3d delay'), 'Timeline message highlights +3d delay on closed order');
+// ----------------------------------------------------------------------------
+// TEST GROUP 9: Multi-Product Delay Isolation & Individual Revised Timelines
+// ----------------------------------------------------------------------------
+console.log('\n📋 GROUP 9: Multi-Product Delay Isolation & Individual Revised Timelines');
+
+const line1Delayed = recalculateProductLine({
+  id: 'LINE-01',
+  lineNumber: 'LINE-01',
+  productName: 'High Pressure Valve 4" 1500#',
+  category: 'High Pressure Valves',
+  qty: 5,
+  designType: 'Existing Design',
+  materials: [],
+  status: 'Delayed',
+  overallVarianceDays: 4,
+  milestones: build14Milestones('2026-08-01').map((m, idx) => {
+    if (idx === 0) return { ...m, status: 'Completed', actualEndDate: '2026-08-07', varianceDays: 4 };
+    return { ...m, forecastEndDate: addDays(m.committedBaselineEndDate, 4), varianceDays: 4 };
+  })
+}, '2026-08-10');
+
+const line2OnTime = recalculateProductLine({
+  id: 'LINE-02',
+  lineNumber: 'LINE-02',
+  productName: 'Cryogenic Valve 2" 600#',
+  category: 'Cryogenic Valves',
+  qty: 10,
+  designType: 'Existing Design',
+  materials: [],
+  status: 'In Progress',
+  overallVarianceDays: 0,
+  milestones: build14Milestones('2026-08-01').map((m, idx) => {
+    if (idx === 0) return { ...m, status: 'Completed', actualEndDate: '2026-08-03', varianceDays: 0 };
+    return m;
+  })
+}, '2026-08-10');
+
+assert(line1Delayed.overallVarianceDays === 4, `Line 1 retains its 4d delay variance (got ${line1Delayed.overallVarianceDays}d)`);
+assert(line2OnTime.overallVarianceDays === 0, `Line 2 remains on time with 0d delay variance (got ${line2OnTime.overallVarianceDays}d)`);
+
+const line1FinalMs = line1Delayed.milestones[13];
+const line2FinalMs = line2OnTime.milestones[13];
+
+assert(line1FinalMs.forecastEndDate > line1FinalMs.committedBaselineEndDate, 'Line 1 final milestone delivery date is shifted by delay');
+assert(line2FinalMs.forecastEndDate === line2FinalMs.committedBaselineEndDate, 'Line 2 final milestone delivery date remains strictly on baseline');
+
+// ----------------------------------------------------------------------------
+// TEST GROUP 10: Delay Log Attribution to Specific Product Line
+// ----------------------------------------------------------------------------
+console.log('\n📋 GROUP 10: Delay Log Attribution to Specific Product Line');
+
+const multiProductPO: PurchaseOrder = {
+  id: 'PO-MULTI-01',
+  poNumber: 'CFT-PO-2026-9001',
+  customerName: 'Aramco Offshore',
+  customerPoRef: 'REF-9988',
+  poDate: '2026-08-01',
+  contractReviewRef: 'CR-001',
+  committedDeliveryDate: line1FinalMs.committedBaselineEndDate,
+  revisedDeliveryDate: line1FinalMs.forecastEndDate,
+  status: 'Delayed',
+  productLines: [line1Delayed, line2OnTime],
+  revisions: [],
+  attachments: [],
+  createdBy: 'Sales User',
+  createdAt: '2026-08-01T00:00:00.000Z',
+  lastUpdatedBy: 'Planner User',
+  lastUpdatedAt: '2026-08-10T00:00:00.000Z',
+  isClosed: false
+};
+
+const delayFlow = extractDelayFlow(multiProductPO);
+assert(delayFlow.hasDelays === true, 'Delay flow detects delay in multi-product order');
+assert(delayFlow.rootDelayStep !== null, 'Root delay step identified');
+assert(delayFlow.rootDelayStep?.productLineName === 'High Pressure Valve 4" 1500#', `Delay step accurately attributes the causing product line (got "${delayFlow.rootDelayStep?.productLineName}")`);
+assert(delayFlow.rootDelayStep?.lineNumber === 'LINE-01', `Delay step accurately attributes the causing line number (got "${delayFlow.rootDelayStep?.lineNumber}")`);
 
 console.log('\n================================================================');
 const successRate = totalTests === 0 ? 0 : Math.round((passedTests / totalTests) * 100);
 console.log(`${passedTests === totalTests ? '🎉' : '⚠️'} TEST SUMMARY: ${passedTests}/${totalTests} TESTS PASSED (${successRate}% SUCCESS RATE)`);
 console.log('================================================================\n');
 if (passedTests !== totalTests) throw new Error(`${totalTests - passedTests} e2e test(s) failed`);
+
 
