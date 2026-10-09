@@ -12,6 +12,16 @@ dist
 dist-ssr
 *.local
 
+# Local / production secrets — never commit real credentials.
+# `.env.example` is the only env file that should be tracked.
+.env.production
+.env.local
+.env.*.local
+
+# Local sample data / build artefacts that should not go to the org server.
+Book2.xlsx
+*.xlsx
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

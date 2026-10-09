@@ -74,7 +74,11 @@ app.get('/api/health', async (_req: Request, res: Response) => {
 
 // 2. Shared State GET (High Speed In-Memory Response)
 app.get('/api/shared-state', async (req: Request, res: Response) => {
-  const orgId = req.headers['x-organization-id'] as string || 'default';
+  // TODO(org-backend): enforce tenant isolation from trusted auth/session.
+  // `X-Organization-Id` is currently client-supplied (dev only) — do NOT trust
+  // it alone in production. Expected: WHERE organization_id = req.orgId.
+  const _orgId = req.headers['x-organization-id'] as string || 'default';
+  void _orgId;
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.setHeader('X-Served-By', 'cft-production-engine');
 
