@@ -133,6 +133,7 @@ interface AppContextType {
   approveRectification: (actionId: string, decision: 'Accepted' | 'Rejected', decisionNotes: string, user: string) => void;
   
   createPurchaseOrder: (newPo: Partial<PurchaseOrder>) => { success: boolean; poId?: string; error?: string };
+  importPurchaseOrders: (newPos: PurchaseOrder[], replaceExisting?: boolean) => { success: boolean; count: number; error?: string };
 
   closePurchaseOrder: (poId: string, closureNotes: string, user: string) => { success: boolean; error?: string };
   requestPOCancellation: (params: { poId: string; reason: string; requestedBy?: string }) => { success: boolean; error?: string };
@@ -1822,6 +1823,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true, poId: id };
   };
 
+  const importPurchaseOrders = (
+    newPos: PurchaseOrder[],
+    replaceExisting: boolean = false
+  ): { success: boolean; count: number; error?: string } => {
+    if (!newPos || newPos.length === 0) {
+      return { success: false, count: 0, error: 'No purchase orders to import.' };
+    }
+
+    let updatedList = [...purchaseOrders];
+    let importedCount = 0;
+
+    newPos.forEach(incomingPo => {
+      const existingIdx = updatedList.findIndex(
+        p => p.poNumber.trim().toLowerCase() === incomingPo.poNumber.trim().toLowerCase()
+      );
+
+      if (existingIdx >= 0) {
+        if (replaceExisting) {
+          updatedList[existingIdx] = incomingPo;
+          importedCount++;
+        } else {
+          // Auto-suffix to maintain unique PO
+          const suffixedPo = {
+            ...incomingPo,
+            poNumber: `${incomingPo.poNumber}-IMP`
+          };
+          updatedList = [suffixedPo, ...updatedList];
+          importedCount++;
+        }
+      } else {
+        updatedList = [incomingPo, ...updatedList];
+        importedCount++;
+      }
+
+      addAudit(
+        'System',
+        activeRole,
+        incomingPo.poNumber,
+        'BULK_IMPORT_PO',
+        incomingPo.contractReviewRef || 'CSV-IMPORT',
+        `Bulk imported purchase order with ${incomingPo.productLines.length} product line(s) and historical stage dates.`
+      );
+    });
+
+    setPurchaseOrders(updatedList);
+    persistState('cft_pos', updatedList);
+
+    return { success: true, count: importedCount };
+  };
+
   const closePurchaseOrder = (poId: string, closureNotes: string, user: string) => {
     const po = purchaseOrders.find(p => p.id === poId);
     if (!po) {
@@ -2247,6 +2298,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addBaselineRevision,
       approveRectification,
       createPurchaseOrder,
+      importPurchaseOrders,
       closePurchaseOrder,
       requestPOCancellation,
       approvePOCancellation,

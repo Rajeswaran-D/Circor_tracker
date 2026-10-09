@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import type { PurchaseOrder, DesignType } from '../../types';
-import { Search, Plus, Filter, CheckCircle2, ArrowRight, AlertTriangle } from 'lucide-react';
+import { Search, Plus, Filter, CheckCircle2, ArrowRight, AlertTriangle, FileSpreadsheet, Download } from 'lucide-react';
+import { BulkImportModal } from '../modals/BulkImportModal';
+import { downloadCsvTemplate } from '../../services/csvImportService';
 
 interface PurchaseOrdersModuleProps {
   onSelectPO: (po: PurchaseOrder) => void;
@@ -13,6 +15,7 @@ export const PurchaseOrdersModule: React.FC<PurchaseOrdersModuleProps> = ({ onSe
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showBulkImportModal, setShowBulkImportModal] = useState(false);
 
   // Create PO Form State
   const [newPoNumber, setNewPoNumber] = useState('');
@@ -92,12 +95,28 @@ export const PurchaseOrdersModule: React.FC<PurchaseOrdersModuleProps> = ({ onSe
         </div>
 
         {activeRole === 'Project Management' || activeRole === 'Sales / AE (Customer PO)' || activeRole === 'Project Manager (PM Baseline)' ? (
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-1.5 px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold shadow-xs transition-all cursor-pointer"
-          >
-            <Plus className="w-4 h-4" /> Log New Purchase Order (Flow #1)
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={downloadCsvTemplate}
+              className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold shadow-2xs transition-all cursor-pointer"
+              title="Download empty/prefilled CSV template with standard milestone columns"
+            >
+              <Download className="w-4 h-4 text-slate-500" /> Download Template (.csv)
+            </button>
+            <button
+              onClick={() => setShowBulkImportModal(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-xs font-bold shadow-xs transition-all cursor-pointer"
+              title="Import spreadsheet with active orders and historical stage dates"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-blue-200" /> Bulk Import (CSV / Excel)
+            </button>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="flex items-center gap-1.5 px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold shadow-xs transition-all cursor-pointer"
+            >
+              <Plus className="w-4 h-4" /> Log New Purchase Order (Flow #1)
+            </button>
+          </div>
         ) : null}
       </div>
 
@@ -388,6 +407,12 @@ export const PurchaseOrdersModule: React.FC<PurchaseOrdersModuleProps> = ({ onSe
           </div>
         </div>
       )}
+
+      {/* Bulk Import Modal */}
+      <BulkImportModal
+        isOpen={showBulkImportModal}
+        onClose={() => setShowBulkImportModal(false)}
+      />
 
     </div>
   );

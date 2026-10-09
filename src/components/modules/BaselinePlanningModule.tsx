@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { Calendar, CheckCircle2, Lock, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Calendar, CheckCircle2, Lock, ShieldCheck, AlertTriangle, FileSpreadsheet, Download } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { BaselineRevisionModal } from '../modals/BaselineRevisionModal';
 import { CloseOrderModal } from '../modals/CloseOrderModal';
+import { BulkImportModal } from '../modals/BulkImportModal';
+import { downloadCsvTemplate } from '../../services/csvImportService';
 import type { PurchaseOrder } from '../../types';
 import { getPOManufacturingStatus } from '../../utils/statusUtils';
 
@@ -10,6 +12,7 @@ export const BaselinePlanningModule: React.FC = () => {
   const { purchaseOrders, activeRole } = useApp();
   const [reviewPO, setReviewPO] = useState<PurchaseOrder | null>(null);
   const [closingPO, setClosingPO] = useState<PurchaseOrder | null>(null);
+  const [showBulkImportModal, setShowBulkImportModal] = useState(false);
   const isPM = activeRole === 'Project Manager (PM Baseline)' || activeRole === 'Project Management';
 
   const isPOReadyForClosing = (po: PurchaseOrder) =>
@@ -28,13 +31,36 @@ export const BaselinePlanningModule: React.FC = () => {
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-950 rounded-2xl p-6 text-white shadow-lg">
-        <div className="flex items-center gap-2 mb-2">
-          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold font-mono bg-cyan-500/20 text-cyan-200 border border-cyan-400/30">PM BASELINE CONTROL</span>
-          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-white/10 text-slate-200 border border-white/20">FULL PROJECT PLAN</span>
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-950 rounded-2xl p-6 text-white shadow-lg flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold font-mono bg-cyan-500/20 text-cyan-200 border border-cyan-400/30">PM BASELINE CONTROL</span>
+            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-white/10 text-slate-200 border border-white/20">FULL PROJECT PLAN</span>
+          </div>
+          <h1 className="text-2xl font-black tracking-tight">Baseline Planning and Review</h1>
+          <p className="text-xs text-slate-300 mt-1 max-w-2xl">Review the complete milestone flow, configure durations and dates, manage baseline governance, and formally sign off & close completed orders.</p>
         </div>
-        <h1 className="text-2xl font-black tracking-tight">Baseline Planning and Review</h1>
-        <p className="text-xs text-slate-300 mt-1 max-w-2xl">Review the complete milestone flow, configure durations and dates, manage baseline governance, and formally sign off & close completed orders.</p>
+
+        {isPM && (
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={downloadCsvTemplate}
+              className="flex items-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold border border-white/20 shadow-xs transition-all cursor-pointer"
+              title="Download standardized CSV import template"
+            >
+              <Download className="w-4 h-4 text-cyan-300" />
+              Download Template (.csv)
+            </button>
+            <button
+              onClick={() => setShowBulkImportModal(true)}
+              className="flex items-center gap-1.5 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-bold shadow-md transition-all cursor-pointer border border-cyan-400/40"
+              title="Bulk import spreadsheet data with milestone completion dates"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-cyan-100" />
+              Bulk Import (CSV / Excel)
+            </button>
+          </div>
+        )}
       </div>
 
       {/* SECTION 1: ORDERS READY FOR CLOSING (DEDICATED PM BASELINE ACTION SECTION) */}
@@ -295,6 +321,12 @@ export const BaselinePlanningModule: React.FC = () => {
           po={closingPO}
         />
       )}
+
+      {/* Bulk Import Modal */}
+      <BulkImportModal
+        isOpen={showBulkImportModal}
+        onClose={() => setShowBulkImportModal(false)}
+      />
     </div>
   );
 };
