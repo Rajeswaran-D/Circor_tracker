@@ -1858,44 +1858,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, count: 0, error: 'No purchase orders to import.' };
     }
 
-    let updatedList = [...purchaseOrders];
+    const existingIndexMap = new Map<string, number>();
+    const updatedList = [...purchaseOrders];
+    updatedList.forEach((p, idx) => {
+      existingIndexMap.set(p.poNumber.trim().toLowerCase(), idx);
+    });
+
+    const newEntries: PurchaseOrder[] = [];
     let importedCount = 0;
 
     newPos.forEach(incomingPo => {
-      const existingIdx = updatedList.findIndex(
-        p => p.poNumber.trim().toLowerCase() === incomingPo.poNumber.trim().toLowerCase()
-      );
+      const key = incomingPo.poNumber.trim().toLowerCase();
+      const existingIdx = existingIndexMap.get(key);
 
-      if (existingIdx >= 0) {
+      if (existingIdx !== undefined) {
         if (replaceExisting) {
           updatedList[existingIdx] = incomingPo;
           importedCount++;
         } else {
-          // Auto-suffix to maintain unique PO
           const suffixedPo = {
             ...incomingPo,
             poNumber: `${incomingPo.poNumber}-IMP`
           };
-          updatedList = [suffixedPo, ...updatedList];
+          newEntries.push(suffixedPo);
           importedCount++;
         }
       } else {
-        updatedList = [incomingPo, ...updatedList];
+        newEntries.push(incomingPo);
         importedCount++;
       }
-
-      addAudit(
-        'System',
-        activeRole,
-        incomingPo.poNumber,
-        'BULK_IMPORT_PO',
-        incomingPo.contractReviewRef || 'CSV-IMPORT',
-        `Bulk imported purchase order with ${incomingPo.productLines.length} product line(s) and historical stage dates.`
-      );
     });
 
-    setPurchaseOrders(updatedList);
-    persistState('cft_pos', updatedList);
+    const finalList = [...newEntries, ...updatedList];
+    setPurchaseOrders(finalList);
+    persistState('cft_pos', finalList);
+
+    addAudit(
+      'System',
+      activeRole,
+      `BATCH-IMPORT-${importedCount}`,
+      'BULK_IMPORT_PO',
+      'CSV-EXCEL-IMPORT',
+      `Bulk imported ${importedCount} purchase orders into active system pipeline.`
+    );
 
     return { success: true, count: importedCount };
   };

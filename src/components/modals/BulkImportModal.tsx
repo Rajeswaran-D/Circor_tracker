@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import { useApp } from '../../context/AppContext';
 import {
   downloadCsvTemplate,
@@ -35,44 +36,59 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
   const [isProcessing, setIsProcessing] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [searchFilter, setSearchFilter] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
+  const runValidation = (text: string) => {
+    const result = parseAndValidateCsv(text, purchaseOrders, templates, products, activeRole);
+    setPreviewResult(result);
+    setSuccessMsg(null);
+  };
+
+  const processUploadedFile = (file: File) => {
+    setFileName(file.name);
+    const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+    if (isExcel) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const buffer = event.target?.result as ArrayBuffer;
+          const wb = XLSX.read(buffer, { type: 'array', cellDates: true, dateNF: 'yyyy-mm-dd', cellText: false });
+          const sheetName = wb.SheetNames[0];
+          const sheet = wb.Sheets[sheetName];
+          const text = XLSX.utils.sheet_to_csv(sheet, { dateNF: 'yyyy-mm-dd', blankrows: false });
+          setCsvText(text);
+          runValidation(text);
+        } catch (err: any) {
+          alert('Failed to parse Excel file: ' + (err.message || 'Unknown error'));
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target?.result as string;
+        setCsvText(text);
+        runValidation(text);
+      };
+      reader.readAsText(file);
+    }
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = event.target?.result as string;
-      setCsvText(text);
-      runValidation(text);
-    };
-    reader.readAsText(file);
+    processUploadedFile(file);
   };
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
     if (!file) return;
-
-    setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = event.target?.result as string;
-      setCsvText(text);
-      runValidation(text);
-    };
-    reader.readAsText(file);
-  };
-
-  const runValidation = (text: string) => {
-    const result = parseAndValidateCsv(text, purchaseOrders, templates, products, activeRole);
-    setPreviewResult(result);
-    setSuccessMsg(null);
+    processUploadedFile(file);
   };
 
   const handlePasteChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -112,6 +128,8 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  const pageSize = 25;
+
   const filteredPreviewRows = previewResult
     ? previewResult.previewRows.filter(
         row =>
@@ -122,6 +140,9 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
           row.lineNumber.toLowerCase().includes(searchFilter.toLowerCase())
       )
     : [];
+
+  const totalPages = Math.max(1, Math.ceil(filteredPreviewRows.length / pageSize));
+  const paginatedRows = filteredPreviewRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-xs p-4 overflow-y-auto">
@@ -184,7 +205,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
-                Upload CSV File
+                Upload CSV / Excel File
               </button>
               <button
                 onClick={() => setInputMode('paste')}
@@ -224,7 +245,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
                 type="file"
                 ref={fileInputRef}
                 onChange={handleFileChange}
-                accept=".csv,text/csv,text/plain"
+                accept=".csv, .xlsx, .xls, text/csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel, text/plain"
                 className="hidden"
               />
               <div className="flex flex-col items-center justify-center space-y-2">
@@ -238,8 +259,8 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
                   </div>
                 ) : (
                   <div>
-                    <p className="font-bold text-slate-800 text-sm">Drag & drop your CSV file here, or click to browse</p>
-                    <p className="text-slate-500 text-xs mt-0.5">Supported format: Standard .csv from Excel / ERP exports</p>
+                    <p className="font-bold text-slate-800 text-sm">Drag & drop your Excel (.xlsx) or CSV file here, or click to browse</p>
+                    <p className="text-slate-500 text-xs mt-0.5">Supported formats: Excel (.xlsx, .xls) and CSV (.csv)</p>
                   </div>
                 )}
               </div>
@@ -325,24 +346,32 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
 
               {/* Preview Table Header & Search */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <Eye className="w-4 h-4 text-slate-500" />
                     <h3 className="font-bold text-slate-800">Parsed Order Schedule Preview</h3>
+                    <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-bold">
+                      {filteredPreviewRows.length} total line(s)
+                    </span>
                   </div>
-                  <input
-                    type="text"
-                    placeholder="Filter preview items..."
-                    value={searchFilter}
-                    onChange={(e) => setSearchFilter(e.target.value)}
-                    className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs text-slate-800 focus:outline-none focus:border-emerald-600"
-                  />
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="Filter by PO, customer, product..."
+                      value={searchFilter}
+                      onChange={(e) => {
+                        setSearchFilter(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs text-slate-800 focus:outline-none focus:border-emerald-600 w-56"
+                    />
+                  </div>
                 </div>
 
                 {/* Table */}
-                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs max-h-60 overflow-y-auto">
+                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs max-h-64 overflow-y-auto">
                   <table className="w-full text-left border-collapse text-[11px]">
-                    <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200 sticky top-0">
+                    <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200 sticky top-0 z-10">
                       <tr>
                         <th className="py-2 px-3">PO Number</th>
                         <th className="py-2 px-3">Customer</th>
@@ -356,61 +385,97 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
-                      {filteredPreviewRows.map((row, idx) => (
-                        <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
-                          <td className="py-2 px-3 font-mono font-bold text-slate-900">{row.poNumber}</td>
-                          <td className="py-2 px-3 font-medium text-slate-800">{row.customerName}</td>
-                          <td className="py-2 px-3 text-slate-700">
-                            <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-[10px] text-slate-700 font-bold mr-1">{row.lineNumber}</span>
-                            {row.productName}
-                          </td>
-                          <td className="py-2 px-3">
-                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
-                              row.designType === 'New Design'
-                                ? 'bg-purple-100 text-purple-800 border border-purple-200'
-                                : 'bg-slate-100 text-slate-700 border border-slate-200'
-                            }`}>
-                              {row.designType}
-                            </span>
-                          </td>
-                          <td className="py-2 px-3 font-bold font-mono text-slate-900">{row.qty} pcs</td>
-                          <td className="py-2 px-3 font-mono text-slate-600">{row.customerPoDate}</td>
-                          <td className="py-2 px-3">
-                            <div className="flex items-center gap-2">
-                              <div className="w-16 bg-slate-100 rounded-full h-2 overflow-hidden border border-slate-200">
-                                <div
-                                  className={`h-full rounded-full ${
-                                    row.completedStagesCount === 14 ? 'bg-emerald-500' : 'bg-blue-500'
-                                  }`}
-                                  style={{ width: `${(row.completedStagesCount / 14) * 100}%` }}
-                                />
-                              </div>
-                              <span className="font-bold text-slate-700 text-[10px]">
-                                {row.completedStagesCount}/14
-                              </span>
-                            </div>
-                          </td>
-                          <td className="py-2 px-3 font-medium text-slate-800">
-                            {row.currentActiveStageName}
-                          </td>
-                          <td className="py-2 px-3">
-                            <span
-                              className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
-                                row.status === 'Completed'
-                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                  : row.status === 'In Progress'
-                                  ? 'bg-blue-100 text-blue-800 border border-blue-300'
-                                  : 'bg-amber-100 text-amber-800 border border-amber-300'
-                              }`}
-                            >
-                              {row.status}
-                            </span>
+                      {paginatedRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="py-6 text-center text-slate-400">
+                            No matching preview rows found.
                           </td>
                         </tr>
-                      ))}
+                      ) : (
+                        paginatedRows.map((row, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="py-2 px-3 font-mono font-bold text-slate-900">{row.poNumber}</td>
+                            <td className="py-2 px-3 font-medium text-slate-800">{row.customerName}</td>
+                            <td className="py-2 px-3 text-slate-700">
+                              <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-[10px] text-slate-700 font-bold mr-1">{row.lineNumber}</span>
+                              {row.productName}
+                            </td>
+                            <td className="py-2 px-3">
+                              <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                                row.designType === 'New Design'
+                                  ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                                  : 'bg-slate-100 text-slate-700 border border-slate-200'
+                              }`}>
+                                {row.designType}
+                              </span>
+                            </td>
+                            <td className="py-2 px-3 font-bold font-mono text-slate-900">{row.qty} pcs</td>
+                            <td className="py-2 px-3 font-mono text-slate-600">{row.customerPoDate}</td>
+                            <td className="py-2 px-3">
+                              <div className="flex items-center gap-2">
+                                <div className="w-16 bg-slate-100 rounded-full h-2 overflow-hidden border border-slate-200">
+                                  <div
+                                    className={`h-full rounded-full ${
+                                      row.completedStagesCount === 14 ? 'bg-emerald-500' : 'bg-blue-500'
+                                    }`}
+                                    style={{ width: `${(row.completedStagesCount / 14) * 100}%` }}
+                                  />
+                                </div>
+                                <span className="font-bold text-slate-700 text-[10px]">
+                                  {row.completedStagesCount}/14
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-2 px-3 font-medium text-slate-800">
+                              {row.currentActiveStageName}
+                            </td>
+                            <td className="py-2 px-3">
+                              <span
+                                className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
+                                  row.status === 'Completed'
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                    : row.status === 'In Progress'
+                                    ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                    : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                }`}
+                              >
+                                {row.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
+
+                {/* Pagination Controls */}
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-between pt-1 text-xs text-slate-500">
+                    <div>
+                      Showing {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, filteredPreviewRows.length)} of {filteredPreviewRows.length} rows
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 rounded text-slate-700 font-bold cursor-pointer"
+                      >
+                        Prev
+                      </button>
+                      <span className="font-mono px-2 py-0.5 bg-slate-50 border border-slate-200 rounded font-bold">
+                        {currentPage} / {totalPages}
+                      </span>
+                      <button
+                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                        disabled={currentPage === totalPages}
+                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 rounded text-slate-700 font-bold cursor-pointer"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Overwrite Option */}

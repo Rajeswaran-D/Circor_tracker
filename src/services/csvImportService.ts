@@ -13,6 +13,7 @@ import {
   isValidDateString,
   formatDate,
   addDays,
+  getDaysDifference,
   recalculateProductLine,
   resolveLineMaterials,
   buildTemplateSchedule,
@@ -67,7 +68,7 @@ export interface ImportPreviewResult {
 }
 
 /**
- * Normalizes loose date input formats (YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, DD-MM-YYYY)
+ * Normalizes loose date input formats (YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, DD-MM-YYYY, DD-Mon-YYYY)
  * into strict ISO calendar string 'YYYY-MM-DD'.
  */
 export function normalizeCsvDate(raw: string | undefined | null): string | undefined {
@@ -75,49 +76,79 @@ export function normalizeCsvDate(raw: string | undefined | null): string | undef
   const str = raw.trim();
   if (!str) return undefined;
 
+  // Ignore durations, counts, percentages, and non-date numbers (e.g. "5", "7", "14", "100%", "5 days", "1 pcs")
+  if (/^\d{1,3}(%|\s*(days?|nos|pcs|weeks?))?$/i.test(str) || str.endsWith('%')) {
+    return undefined;
+  }
+  // Ignore non-date text statuses
+  if (/^(shipped|in assembly|pending material|pending|passed|failed|rejected|yes|no|fob|cif|ex works|ex-works|in progress|completed|on time|delayed)$/i.test(str)) {
+    return undefined;
+  }
+
   // Already standard ISO YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
     return isValidDateString(str) ? str : undefined;
   }
 
-  // YYYY/MM/DD
-  if (/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(str)) {
-    const [y, m, d] = str.split('/');
+  // YYYY/MM/DD or YYYY.MM.DD
+  if (/^\d{4}[\/\.]\d{1,2}[\/\.]\d{1,2}$/.test(str)) {
+    const [y, m, d] = str.split(/[\/\.]/);
     const iso = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
     return isValidDateString(iso) ? iso : undefined;
   }
 
-  // DD/MM/YYYY or MM/DD/YYYY or DD-MM-YYYY
+  // DD/MM/YYYY, DD-MM-YYYY, MM/DD/YYYY, DD-Mon-YYYY
   const parts = str.split(/[\/\-\.]/);
   if (parts.length === 3) {
     let [p1, p2, p3] = parts;
-    if (p3.length === 2) p3 = `20${p3}`;
-    if (p3.length === 4) {
-      // If p1 > 12, it's definitely DD/MM/YYYY
+
+    // Support month names (e.g. 15-Aug-2026, 15-Aug-26)
+    const monthNames: Record<string, number> = {
+      jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+      jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12
+    };
+    const p2Lower = p2.toLowerCase().slice(0, 3);
+    if (monthNames[p2Lower]) {
+      const month = monthNames[p2Lower];
+      const day = parseInt(p1, 10);
+      if (p3.length === 2 && /^\d{2}$/.test(p3)) p3 = `20${p3}`;
+      if (p3.length === 4 && !isNaN(day) && day >= 1 && day <= 31) {
+        const iso = `${p3}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        if (isValidDateString(iso)) return iso;
+      }
+    }
+
+    if (p3.length === 2 && /^\d{2}$/.test(p3)) p3 = `20${p3}`;
+    if (p3.length === 4 && /^\d{4}$/.test(p3)) {
       const num1 = parseInt(p1, 10);
       const num2 = parseInt(p2, 10);
-      let day = num1;
-      let month = num2;
+      if (!isNaN(num1) && !isNaN(num2)) {
+        let day = num1;
+        let month = num2;
 
-      if (num1 <= 12 && num2 > 12) {
-        // MM/DD/YYYY
-        month = num1;
-        day = num2;
+        if (num1 <= 12 && num2 > 12) {
+          // MM/DD/YYYY
+          month = num1;
+          day = num2;
+        }
+
+        const iso = `${p3}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        if (isValidDateString(iso)) return iso;
       }
-
-      const iso = `${p3}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      if (isValidDateString(iso)) return iso;
     }
   }
 
-  // Try standard Date parse fallback
-  try {
-    const d = new Date(str);
-    if (!Number.isNaN(d.getTime())) {
-      return formatDate(d);
+  // Support Excel numeric serial dates (e.g. 46275 for dates in 2026)
+  if (/^\d{5}$/.test(str)) {
+    const serial = parseInt(str, 10);
+    if (serial > 30000 && serial < 60000) {
+      const utcDays = serial - 25569;
+      const utcValue = utcDays * 86400 * 1000;
+      const dateInfo = new Date(utcValue);
+      if (!isNaN(dateInfo.getTime())) {
+        return formatDate(dateInfo);
+      }
     }
-  } catch {
-    // Ignore parse error
   }
 
   return undefined;
@@ -407,7 +438,50 @@ export function parseAndValidateCsv(
     };
   }
 
-  const rawHeaders = matrix[0];
+  let startDataRow = 1;
+  let rawHeaders = matrix[0];
+
+  // Check if Row 1 & Row 2 form a 2-tier merged header (like Book2.xlsx tracker)
+  const is2TierHeader = matrix.length >= 2 && (
+    matrix[0].some(c => /Mini-BOM|PO - Long Leads|Change Requests|Material Receipts/i.test(c.trim())) ||
+    (matrix[1] && matrix[1].some(c => /Project No|Scope|COTD|CORB Release Date/i.test(c.trim())))
+  );
+
+  if (is2TierHeader) {
+    startDataRow = 2;
+    let currentCategory = '';
+    rawHeaders = matrix[1].map((subHeader, colIdx) => {
+      const parentHeader = matrix[0][colIdx]?.trim() || '';
+      if (parentHeader) {
+        currentCategory = parentHeader;
+      }
+      const cleanSub = subHeader?.trim() || '';
+      if (currentCategory && ['Planned', 'Actual', 'Delay'].includes(cleanSub)) {
+        return `${currentCategory} ${cleanSub}`.trim();
+      }
+      return cleanSub || currentCategory;
+    });
+  }
+
+  // Verify that there are data rows beyond the headers
+  const actualDataRows = matrix.slice(startDataRow).filter(r => r.some(c => c.trim().length > 0));
+  if (actualDataRows.length === 0) {
+    return {
+      isValid: false,
+      totalRows: 0,
+      totalPOs: 0,
+      totalProductLines: 0,
+      errors: [
+        is2TierHeader
+          ? 'No order rows found. The uploaded spreadsheet contains valid headers (Rows 1 & 2), but has no order rows filled in below Row 2. Please enter your order data (PO NO, Customer Name, Scope, PO Date, Promised Date) starting from Row 3 and re-upload.'
+          : 'The CSV must contain a header row and at least one data row.'
+      ],
+      warnings: [],
+      previewPOs: [],
+      previewRows: []
+    };
+  }
+
   const headerMap: Record<string, number> = {};
   rawHeaders.forEach((h, idx) => {
     headerMap[normalizeHeader(h)] = idx;
@@ -422,12 +496,12 @@ export function parseAndValidateCsv(
   };
 
   // Header Indices
-  const poNumIdx = getColIdx(['PO Number', 'PONumber', 'po_number', 'PO_No', 'Order No', 'Order Number']);
+  const poNumIdx = getColIdx(['PO Number', 'PONumber', 'po_number', 'PO_No', 'PO NO', 'Project No', 'Project Number', 'Order No', 'Order Number']);
   const custNameIdx = getColIdx(['Customer Name', 'Customer', 'Client Name', 'Client']);
-  const poRefIdx = getColIdx(['Customer PO Ref', 'PO Reference', 'Customer Ref', 'PO Ref']);
+  const poRefIdx = getColIdx(['Customer PO Ref', 'PO Reference', 'Customer Ref', 'PO Ref', 'PO NO']);
   const poDateIdx = getColIdx(['Customer PO Date', 'PO Date', 'Order Date', 'Date']);
-  const delDateIdx = getColIdx(['Contractual Delivery Date', 'Delivery Date', 'Target Delivery Date', 'Promised Date']);
-  const prodNameIdx = getColIdx(['Product Name', 'Product', 'Product Line', 'Item Description', 'Description', 'Valve Type']);
+  const delDateIdx = getColIdx(['Contractual Delivery Date', 'Delivery Date', 'Target Delivery Date', 'Promised Date', 'COTD']);
+  const prodNameIdx = getColIdx(['Product Name', 'Product', 'Product Line', 'Scope', 'Item Description', 'Description', 'Valve Type']);
   const categoryIdx = getColIdx(['Category', 'Product Category']);
   const designTypeIdx = getColIdx(['Design Type', 'Design']);
   const qtyIdx = getColIdx(['Quantity', 'Qty', 'Quantity (Nos)', 'Nos']);
@@ -436,8 +510,9 @@ export function parseAndValidateCsv(
   const matOrderDateIdx = getColIdx(['S7_MaterialOrderDate', 'S7_MaterialOrderedDate', 'S7_MaterialOrder_Actual', 'Material Order Date', 'Material Ordered Date', 'S7_OrderDate']);
   const matExpectedDateIdx = getColIdx(['S7_MaterialExpectedDate', 'S7_MaterialExpected_Actual', 'Material Expected Date', 'Material Delivery Date', 'S7_ExpectedDate']);
   const matInspectionIdx = getColIdx(['S7_InspectionResult', 'Inspection Result', 'Incoming Inspection', 'S7_Inspection']);
+  const remarksIdx = getColIdx(['Remarks', 'Remark', 'Delay Reason', 'Notes', 'Work Notes', 'Comments', 'delay_reason']);
 
-  // Milestone Date Columns
+  // Milestone Date Columns for all 14 Standard Stages
   const stageColIndices = STANDARD_STAGES_IMPORT_MAP.map(s => {
     const exactCol = getColIdx([
       s.colHeader,
@@ -446,7 +521,22 @@ export function parseAndValidateCsv(
       `S${s.stage}_Actual`,
       `S${s.stage}`,
       s.key,
-      s.name
+      s.name,
+      // Comprehensive 14-Stage Specific Aliases (in strict priority order)
+      ...(s.stage === 1 ? ['Customer PO Date', 'Customer PO Intake', 'PO Intake', 'PO Date', 'Order Date', 'Date'] : []),
+      ...(s.stage === 2 ? ['PM Baseline Actual', 'PM Baseline Date', 'PM Baseline', 'Baseline Review & Planning', 'Baseline Date', 'PM Baseline Schedule'] : []),
+      ...(s.stage === 3 ? ['CORB Release Date', 'CORB Release Actual', 'CORB Release', 'CORB Open Points Closure', 'CORB Actual', 'CORB'] : []),
+      ...(s.stage === 4 ? ['Mini-BOM Actual', 'Mini-BOM', 'BOM Release Date', 'BOM Release Actual', 'BOM Actual', 'BOM Release', 'BOM'] : []),
+      ...(s.stage === 5 ? ['Work Order Release Actual', 'WO Release Actual', 'Work Order Release', 'WO Release Date', 'WO Release', 'Work Order', 'WO Actual', 'WO'] : []),
+      ...(s.stage === 6 ? ['PO - Long Leads Actual', 'Long Lead PO Actual', 'PO - Long Leads', 'Sub-Supplier PO Actual', 'Sub Supplier PO Actual', 'PO Actual', 'Sub-Supplier PO Date', 'Sub Supplier PO Date', 'Sub-Supplier PO', 'Sub Supplier PO'] : []),
+      ...(s.stage === 7 ? ['Material Receipts Actual', 'Material Receipt Actual', 'Material Receipt Date', 'Mat\'l receipt Actual', 'Material Receipt (GRN)', 'Material Receipt', 'Material Receipts', 'GRN Actual', 'GRN Date', 'GRN'] : []),
+      ...(s.stage === 8 ? ['Machining Actual', 'Machining Date', 'Machining Complete', 'Machining'] : []),
+      ...(s.stage === 9 ? ['Assembly Actual', 'Assembly Date', 'Assembly Complete', 'Assembly'] : []),
+      ...(s.stage === 10 ? ['FG Actual', 'Finished Goods Actual', 'FG Date', 'Finished Goods', 'FG Complete', 'FG'] : []),
+      ...(s.stage === 11 ? ['Customer Inspection Actual', 'Customer Inspection Date', 'Inspection Actual', 'Customer Inspection', 'Inspection Complete', 'Inspection'] : []),
+      ...(s.stage === 12 ? ['Painting Actual', 'Painting Date', 'Painting Complete', 'Painting'] : []),
+      ...(s.stage === 13 ? ['TRN Actual', 'TRN Date', 'Test Report Notice', 'TRN Complete', 'TRN'] : []),
+      ...(s.stage === 14 ? ['Packing & Dispatch Actual', 'Packing & Dispatch Date', 'Packing / Shipping Actual', 'Final Shipment & Dispatch Actual', 'Shipment Actual', 'Dispatch Actual', 'Packing & Dispatch', 'Shipment Date', 'Dispatch Date'] : [])
     ]);
     return {
       stage: s.stage,
@@ -457,13 +547,11 @@ export function parseAndValidateCsv(
     };
   });
 
-  if (poNumIdx === -1) errors.push('Missing required column header: "PO Number"');
+  if (poNumIdx === -1) errors.push('Missing required column header: "PO Number" (or "PO NO" / "Project No")');
   if (custNameIdx === -1) errors.push('Missing required column header: "Customer Name"');
-  if (poDateIdx === -1) errors.push('Missing required column header: "Customer PO Date"');
-  if (delDateIdx === -1) errors.push('Missing required column header: "Contractual Delivery Date"');
-  if (prodNameIdx === -1) errors.push('Missing required column header: "Product Name"');
-  if (designTypeIdx === -1) errors.push('Missing required column header: "Design Type"');
-  if (qtyIdx === -1) errors.push('Missing required column header: "Quantity"');
+  if (poDateIdx === -1) errors.push('Missing required column header: "Customer PO Date" (or "PO Date")');
+  if (delDateIdx === -1) errors.push('Missing required column header: "Contractual Delivery Date" (or "Promised Date" / "COTD")');
+  if (prodNameIdx === -1) errors.push('Missing required column header: "Product Name" (or "Scope")');
 
   if (errors.length > 0) {
     return {
@@ -491,6 +579,7 @@ export function parseAndValidateCsv(
     matExpectedDate?: string;
     matReceivedDate?: string;
     inspectionResult?: 'Passed' | 'Rejected' | 'Pending';
+    remarks?: string;
     errors: string[];
     warnings: string[];
   }
@@ -504,10 +593,13 @@ export function parseAndValidateCsv(
     lines: RawLineItem[];
   }
 
+  // Pre-index existing POs and catalog items for O(1) performance with 500+ orders
+  const existingPoSet = new Set(existingPOs.map(p => p.poNumber.trim().toLowerCase()));
+
   const poGroups: Map<string, RawPOGroup> = new Map();
   const previewRows: ImportPreviewRow[] = [];
 
-  for (let r = 1; r < matrix.length; r++) {
+  for (let r = startDataRow; r < matrix.length; r++) {
     const row = matrix[r];
     if (row.length === 0 || row.every(c => !c.trim())) continue;
 
@@ -525,7 +617,8 @@ export function parseAndValidateCsv(
     const rawCategory = categoryIdx !== -1 ? row[categoryIdx]?.trim() : '';
     const category = rawCategory || 'High-Pressure Control Valves';
     const rawQty = qtyIdx !== -1 ? row[qtyIdx] : '';
-    const qty = parseInt(rawQty, 10);
+    const parsedQty = parseInt(rawQty, 10);
+    const qty = (!rawQty || isNaN(parsedQty) || parsedQty < 1) ? 1 : parsedQty;
     const rawDesign = designTypeIdx !== -1 ? row[designTypeIdx]?.trim() : '';
     const designType: DesignType = /new/i.test(rawDesign) ? 'New Design' : 'Existing Design';
     const rawDelDate = delDateIdx !== -1 ? row[delDateIdx] : '';
@@ -542,6 +635,8 @@ export function parseAndValidateCsv(
       /^rej/i.test(rawInspection) ? 'Rejected' :
       /^pend/i.test(rawInspection) ? 'Pending' :
       'Passed';
+
+    const rawRemarks = remarksIdx !== -1 ? row[remarksIdx]?.trim() : '';
 
     if (!poNumber) {
       rowErrors.push(`Row #${rowNum}: Missing PO Number.`);
@@ -569,18 +664,12 @@ export function parseAndValidateCsv(
       rowErrors.push(`Row #${rowNum}: Missing Product Name.`);
     }
 
-    if (!rawDesign) {
-      rowErrors.push(`Row #${rowNum}: Missing Design Type ("Existing Design" or "New Design").`);
-    }
-
-    if (!rawQty || isNaN(qty) || qty < 1) {
+    if (rawQty && (isNaN(parsedQty) || parsedQty < 1)) {
       rowErrors.push(`Row #${rowNum}: Invalid Quantity "${rawQty}". Must be a positive integer.`);
     }
 
-    // Check if PO exists in current database
-    const poAlreadyExists = existingPOs.some(
-      p => p.poNumber.trim().toLowerCase() === poNumber.toLowerCase()
-    );
+    // Check if PO exists in current database (O(1) fast lookup)
+    const poAlreadyExists = existingPoSet.has(poNumber.toLowerCase());
     if (poAlreadyExists) {
       rowWarnings.push(`PO "${poNumber}" already exists in the system. Importing will create an updated entry with generated suffix.`);
     }
@@ -593,7 +682,7 @@ export function parseAndValidateCsv(
     stageColIndices.forEach(stageDef => {
       if (stageDef.colIdx !== -1 && row[stageDef.colIdx]) {
         const rawDate = row[stageDef.colIdx].trim();
-        if (rawDate) {
+        if (rawDate && rawDate !== '0' && rawDate !== '-' && rawDate !== 'N/A' && rawDate !== 'NA' && rawDate !== 'null' && rawDate !== 'undefined') {
           const parsed = normalizeCsvDate(rawDate);
           if (parsed) {
             // Check chronological sanity
@@ -603,7 +692,7 @@ export function parseAndValidateCsv(
             stageActualDates[stageDef.key] = parsed;
             completedCount++;
             lastActualDate = parsed;
-          } else {
+          } else if (rawDate.length > 3 && !/^\d+$/.test(rawDate) && !/^(shipped|in assembly|pending|passed|failed|rejected|yes|no|fob|cif)$/i.test(rawDate)) {
             rowWarnings.push(`Row #${rowNum}: Unrecognized date format for ${stageDef.name}: "${rawDate}".`);
           }
         }
@@ -613,19 +702,25 @@ export function parseAndValidateCsv(
     // Ensure Stage 1 always has actual date = poDate if not explicitly given
     if (!stageActualDates['po_from_customer'] && poDate) {
       stageActualDates['po_from_customer'] = poDate;
-      completedCount++;
     }
 
-    // Determine current active stage name
-    let currentActiveStageName = '1. Customer Purchase Order (PO)';
-    for (const stageDef of stageColIndices) {
-      if (!stageActualDates[stageDef.key]) {
-        currentActiveStageName = stageDef.name;
-        break;
+    // Determine highest completed stage index and calculate accurate bridged completion count & active stage
+    let maxCompletedIndex = -1;
+    stageColIndices.forEach((sDef, idx) => {
+      if (stageActualDates[sDef.key]) {
+        maxCompletedIndex = idx;
       }
-    }
-    if (completedCount === 14) {
+    });
+
+    const effectiveCompletedCount = maxCompletedIndex >= 0 ? maxCompletedIndex + 1 : (poDate ? 1 : 0);
+
+    let currentActiveStageName = '1. Customer Purchase Order (PO)';
+    if (effectiveCompletedCount === 14) {
       currentActiveStageName = '14. Final Shipment & Dispatch (Completed)';
+    } else if (maxCompletedIndex >= 0 && maxCompletedIndex < 13) {
+      currentActiveStageName = STANDARD_STAGES_IMPORT_MAP[maxCompletedIndex + 1].name;
+    } else if (poDate) {
+      currentActiveStageName = STANDARD_STAGES_IMPORT_MAP[1].name;
     }
 
     if (rowErrors.length > 0) {
@@ -646,9 +741,9 @@ export function parseAndValidateCsv(
       qty,
       customerPoDate: poDate || rawPoDate,
       contractualDeliveryDate: deliveryDate,
-      completedStagesCount: completedCount,
+      completedStagesCount: effectiveCompletedCount,
       currentActiveStageName,
-      status: completedCount === 14 ? 'Completed' : (completedCount > 1 ? 'In Progress' : 'Baseline Pending'),
+      status: effectiveCompletedCount === 14 ? 'Completed' : (effectiveCompletedCount > 1 ? 'In Progress' : 'Baseline Pending'),
       errors: rowErrors,
       warnings: rowWarnings
     };
@@ -677,6 +772,7 @@ export function parseAndValidateCsv(
         matExpectedDate: matExpectedDate || undefined,
         matReceivedDate: stageActualDates['material_receipt'] || undefined,
         inspectionResult: rawInspection ? parsedInspection : (stageActualDates['material_receipt'] ? 'Passed' : 'Pending'),
+        remarks: rawRemarks || undefined,
         errors: rowErrors,
         warnings: rowWarnings
       });
@@ -757,18 +853,44 @@ export function parseAndValidateCsv(
         lineId
       });
 
-      // Apply historical completion dates and status
+      // Determine the highest milestone index that has an explicit actual completion date
+      let maxCompletedIndex = -1;
+      baseMilestones.forEach((m, idx) => {
+        if (rawLine.stageActualDates[m.key]) {
+          maxCompletedIndex = idx;
+        }
+      });
+
+      // Apply historical completion dates, bridge omitted stages, and activate the real live stage
       let foundFirstPending = false;
+      let runningChainDate = effectivePoDate;
+
       const configuredMilestones: Milestone[] = baseMilestones.map((m, mIdx) => {
         const actualEnd = rawLine.stageActualDates[m.key];
-        const prevMs = mIdx > 0 ? baseMilestones[mIdx - 1] : undefined;
-        const prevActualEnd = prevMs ? rawLine.stageActualDates[prevMs.key] : undefined;
+        const isPredecessorOfCompleted = mIdx < maxCompletedIndex;
+
+        let delayReason = m.delayReason;
+        let delayCategory = m.delayCategory;
 
         if (actualEnd) {
-          // Completed Milestone
+          // Explicitly completed milestone
           const actualStart = (m.key === 'material_receipt' && effectiveMatOrderDate)
             ? effectiveMatOrderDate
-            : (prevActualEnd || (mIdx === 0 ? effectivePoDate : m.committedBaselineStartDate));
+            : (runningChainDate <= actualEnd ? runningChainDate : actualEnd);
+          runningChainDate = actualEnd;
+
+          if (m.committedBaselineEndDate && actualEnd > m.committedBaselineEndDate) {
+            const diff = getDaysDifference(m.committedBaselineEndDate, actualEnd);
+            if (diff > 0) {
+              delayReason = rawLine.remarks || `Completed with +${diff}d schedule variance`;
+              delayCategory = (m.key === 'sub_supplier_po' || m.key === 'material_receipt')
+                ? 'Supplier'
+                : (m.key === 'corb_release' || m.key === 'bom_release')
+                  ? 'Customer'
+                  : 'Production';
+            }
+          }
+
           return {
             ...m,
             actualStartDate: actualStart,
@@ -777,34 +899,81 @@ export function parseAndValidateCsv(
             forecastEndDate: actualEnd,
             status: 'Completed' as MilestoneStatus,
             completionPct: 100,
+            delayReason,
+            delayCategory,
             docRef: m.key === 'po_from_customer' ? 'PO-INTAKE' : 'LEGACY-IMPORT'
           };
-        } else if (m.key === 'material_receipt' && effectiveMatOrderDate) {
-          // Stage 7 in progress with material ordered
-          foundFirstPending = true;
+        } else if (isPredecessorOfCompleted) {
+          // Omitted intermediate milestone in spreadsheet (e.g. Stage 2 PM Review or Stage 5 WO Release)
+          const actualStart = runningChainDate;
+          const actualEnd = runningChainDate; // seamless handover
+
           return {
             ...m,
-            actualStartDate: effectiveMatOrderDate,
-            forecastStartDate: effectiveMatOrderDate,
-            forecastEndDate: effectiveMatExpectedDate || addDays(effectiveMatOrderDate, m.committedDurationDays),
-            status: 'In Progress' as MilestoneStatus,
-            completionPct: 50
+            actualStartDate: actualStart,
+            actualEndDate: actualEnd,
+            forecastStartDate: actualStart,
+            forecastEndDate: actualEnd,
+            status: 'Completed' as MilestoneStatus,
+            completionPct: 100,
+            docRef: 'AUTO-BRIDGED'
           };
-        } else if (!foundFirstPending) {
-          // First active/in-progress stage
+        } else if (m.key === 'material_receipt' && effectiveMatOrderDate && !actualEnd) {
+          // Stage 7 actively waiting for material arrival
           foundFirstPending = true;
-          const stageStart = prevActualEnd || m.committedBaselineStartDate || todayStr;
+          const stageStart = effectiveMatOrderDate;
+          const stageForecastEnd = effectiveMatExpectedDate || addDays(stageStart, m.committedDurationDays);
+          runningChainDate = stageForecastEnd;
+
+          if (m.committedBaselineEndDate && stageForecastEnd > m.committedBaselineEndDate) {
+            const diff = getDaysDifference(m.committedBaselineEndDate, stageForecastEnd);
+            delayReason = rawLine.remarks || `Material arrival forecast with +${diff}d delay`;
+            delayCategory = 'Supplier';
+          }
+
           return {
             ...m,
             actualStartDate: stageStart,
             forecastStartDate: stageStart,
+            forecastEndDate: stageForecastEnd,
             status: 'In Progress' as MilestoneStatus,
-            completionPct: 25
+            completionPct: 50,
+            delayReason,
+            delayCategory
           };
-        } else {
-          // Future pending stages
+        } else if (!foundFirstPending && mIdx > maxCompletedIndex) {
+          // First active/in-progress milestone after all completed stages
+          foundFirstPending = true;
+          const stageStart = runningChainDate || todayStr;
+          const stageForecastEnd = addDays(stageStart, m.committedDurationDays);
+          runningChainDate = stageForecastEnd;
+
+          if (m.committedBaselineEndDate && stageForecastEnd > m.committedBaselineEndDate) {
+            const diff = getDaysDifference(m.committedBaselineEndDate, stageForecastEnd);
+            delayReason = rawLine.remarks || `In-progress milestone with +${diff}d forecast delay`;
+            delayCategory = 'Production';
+          }
+
           return {
             ...m,
+            actualStartDate: stageStart,
+            forecastStartDate: stageStart,
+            forecastEndDate: stageForecastEnd,
+            status: 'In Progress' as MilestoneStatus,
+            completionPct: 25,
+            delayReason,
+            delayCategory
+          };
+        } else {
+          // Subsequent future pending stages
+          const stageStart = runningChainDate;
+          const stageForecastEnd = addDays(stageStart, m.committedDurationDays);
+          runningChainDate = stageForecastEnd;
+
+          return {
+            ...m,
+            forecastStartDate: stageStart,
+            forecastEndDate: stageForecastEnd,
             status: 'Not Started' as MilestoneStatus,
             completionPct: 0
           };
@@ -829,10 +998,14 @@ export function parseAndValidateCsv(
     });
 
     // Derive PO dates
+    const maxLineVariance = Math.max(...productLines.map(l => l.overallVarianceDays || 0), 0);
     const calculatedDeliveryDate = getOrderDeliveryDate(productLines, effectivePoDate);
     const poDeliveryDate = group.deliveryDate && isValidDateString(group.deliveryDate)
       ? group.deliveryDate
       : calculatedDeliveryDate;
+    const finalRevisedDeliveryDate = maxLineVariance > 0
+      ? addDays(poDeliveryDate, maxLineVariance)
+      : poDeliveryDate;
 
     // Determine PO Status:
     // If all lines are completed -> Completed
@@ -859,7 +1032,7 @@ export function parseAndValidateCsv(
       poDate: effectivePoDate,
       contractReviewRef: `CR-IMP-${poNum}`,
       committedDeliveryDate: poDeliveryDate,
-      revisedDeliveryDate: poDeliveryDate,
+      revisedDeliveryDate: finalRevisedDeliveryDate,
       status: poStatus,
       productLines,
       revisions: [

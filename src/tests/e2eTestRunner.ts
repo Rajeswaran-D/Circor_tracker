@@ -571,6 +571,71 @@ assert(s7Ms !== undefined, 'Found Stage 7 Material Receipt milestone');
 assert(s7Ms!.status === 'Completed', `Stage 7 milestone is marked Completed (got ${s7Ms?.status})`);
 assert(s7Ms!.actualEndDate === '2026-10-06', `Stage 7 actual end date is 2026-10-06 (got ${s7Ms?.actualEndDate})`);
 
+// Test 2-Tier Excel Tracker Import (Book2.xlsx format)
+const book2CsvSample = `,,,,,,,,,,,,,,,,Mini-BOM,,,,PO - Long Leads,,,,BOM,,,,PO,,,,Change Requests,,,,Material Receipts,,,,,,Assembly,,,,,Packing & Dispatch,,,,
+Project No,Customer Name,PO NO,Scope,Booked Amount,Std Delivery (Weeks),PO Date,CORB Release Date,No Of Days,Delay CORB Release,COTD,PO Delivery (Weeks),INCOTERMS,Promised Date,CORB Open Points Closure,Clarification Delay after CORB,Planned,Actual,Delay,Delay in Mini-BOM,Planned,Actual,Delay,Delay in Long lead PO ,Planned,Actual,Delay,BOM Delay,Planned,Actual,Delay,PO Delay,No of Requests,Customer,Internal,Total Delay,Lead Time for Inhouse process,Procurement lead time,Planned,Actual,Delay,Mat'l receipt delay,Lead time,Planned,Actual,Delay,Assembly Delay,Planned,Actual,Delay,Packing / Shipping Delay,Overall Lead Time,LD Applicable,Shippment status,Remarks
+PRJ-901,Qatar Energy,PO-QE-991,DN100 High Pressure Control Valve,$150000,12,2026-09-01,2026-09-05,4,0,2026-11-25,12,FOB,2026-11-25,,,2026-09-08,2026-09-08,0,,2026-09-12,2026-09-12,0,,2026-09-10,2026-09-10,0,,2026-09-15,2026-09-15,0,,,,,,,2026-09-29,2026-09-29,0,,,2026-10-15,2026-10-15,0,,,2026-11-20,2026-11-20,0,,,Completed,All on track`;
+
+const book2Result = parseAndValidateCsv(book2CsvSample, [], [], [], 'System Admin');
+assert(book2Result.isValid === true, `2-tier Book2 tracker format parses with valid status (errors: ${book2Result.errors.join(', ')})`);
+assert(book2Result.warnings.length === 0, `2-tier Book2 tracker has 0 false date warnings (got ${book2Result.warnings.length})`);
+assert(book2Result.previewPOs.length === 1, `2-tier Book2 parser extracts 1 PO (got ${book2Result.previewPOs.length})`);
+const qatarPO = book2Result.previewPOs[0];
+assert(qatarPO.poNumber === 'PO-QE-991', `Extracted correct PO NO from Book2 format (got ${qatarPO.poNumber})`);
+assert(qatarPO.customerName === 'Qatar Energy', `Extracted correct Customer Name (got ${qatarPO.customerName})`);
+assert(qatarPO.productLines[0].productName === 'DN100 High Pressure Control Valve', `Extracted correct Scope/Product Name (got ${qatarPO.productLines[0].productName})`);
+assert(book2Result.previewRows[0].completedStagesCount === 14, `Preview row correctly calculates 14 completed stages (got ${book2Result.previewRows[0].completedStagesCount})`);
+assert(book2Result.previewRows[0].currentActiveStageName.includes('14. Final Shipment'), `Preview row accurately displays Stage 14 status (got ${book2Result.previewRows[0].currentActiveStageName})`);
+
+// TEST GROUP 12: High-Volume 500+ Orders Scalability & Performance Benchmark
+console.log('\n📋 GROUP 12: High-Volume 500+ Orders Scalability & Performance Benchmark');
+
+const customersList = ['Saudi Aramco', 'QatarEnergy', 'Shell Global', 'ExxonMobil', 'Chevron Corp', 'TotalEnergies', 'BP Global', 'ADNOC', 'Petrobras', 'Eni SpA'];
+const productsList = ['2" 600# Gate Valve', '4" 1500# Globe Valve', 'DN50 Flowmeter', '6" 300# Ball Valve', '8" 900# Check Valve', '3" Control Valve'];
+
+const headerRow0 = ',,,,,,,,,,,,,,,,Mini-BOM,,,,PO - Long Leads,,,,BOM,,,,PO,,,,Change Requests,,,,Material Receipts,,,,,,Assembly,,,,,Packing & Dispatch,,,,';
+const headerRow1 = 'Project No,Customer Name,PO NO,Scope,Booked Amount,Std Delivery (Weeks),PO Date,CORB Release Date,No Of Days,Delay CORB Release,COTD,PO Delivery (Weeks),INCOTERMS,Promised Date,CORB Open Points Closure,Clarification Delay after CORB,Planned,Actual,Delay,Delay in Mini-BOM,Planned,Actual,Delay,Delay in Long lead PO ,Planned,Actual,Delay,BOM Delay,Planned,Actual,Delay,PO Delay,No of Requests,Customer,Internal,Total Delay,Lead Time for Inhouse process,Procurement lead time,Planned,Actual,Delay,Mat\'l receipt delay,Lead time,Planned,Actual,Delay,Assembly Delay,Planned,Actual,Delay,Packing / Shipping Delay,Overall Lead Time,LD Applicable,Shippment status,Remarks';
+
+const large500Rows: string[] = [headerRow0, headerRow1];
+for (let i = 1; i <= 500; i++) {
+  const cust = customersList[i % customersList.length];
+  const prod = productsList[i % productsList.length];
+  const poNum = `PO-SCALE-${String(i).padStart(4, '0')}`;
+  const prjNum = `PRJ-${String(i).padStart(4, '0')}`;
+  large500Rows.push(`${prjNum},${cust},${poNum},${prod},75000,8,2026-08-01,2026-08-05,4,0,2026-10-15,8,FOB,2026-10-15,,,2026-08-08,2026-08-08,0,0,2026-08-14,2026-08-14,0,0,2026-08-10,2026-08-10,0,0,2026-08-15,2026-08-15,0,0,0,0,0,0,14,14,2026-09-05,2026-09-05,0,0,7,2026-09-20,2026-09-20,0,0,2026-10-01,2026-10-01,0,0,56,No,Completed,Batch scale order #${i}`);
+}
+
+const large500Csv = large500Rows.join('\r\n');
+const startTime = Date.now();
+const scale500Result = parseAndValidateCsv(large500Csv, [], [], [], 'System Admin');
+const elapsedMs = Date.now() - startTime;
+
+console.log(`  ⏱️ Processed and planned 500 full orders (7,000 milestones) in ${elapsedMs}ms`);
+assert(scale500Result.isValid === true, `500-order high volume CSV parses with valid status (errors: ${scale500Result.errors.join(', ')})`);
+assert(scale500Result.previewPOs.length === 500, `Extracted and planned exactly 500 POs (got ${scale500Result.previewPOs.length})`);
+assert(scale500Result.totalProductLines === 500, `Extracted 500 product lines (got ${scale500Result.totalProductLines})`);
+assert(elapsedMs < 3000, `500-order throughput meets real-time SLA under 3 seconds (took ${elapsedMs}ms)`);
+
+// 1,000 Order Arbitrary Scale Benchmark (14,000 Milestones)
+const large1000Rows: string[] = [headerRow0, headerRow1];
+for (let i = 1; i <= 1000; i++) {
+  const cust = customersList[i % customersList.length];
+  const prod = productsList[i % productsList.length];
+  const poNum = `PO-1K-${String(i).padStart(4, '0')}`;
+  const prjNum = `PRJ-1K-${String(i).padStart(4, '0')}`;
+  large1000Rows.push(`${prjNum},${cust},${poNum},${prod},85000,10,2026-08-01,2026-08-05,4,0,2026-10-15,10,FOB,2026-10-15,,,2026-08-08,2026-08-08,0,0,2026-08-14,2026-08-14,0,0,2026-08-10,2026-08-10,0,0,2026-08-15,2026-08-15,0,0,0,0,0,0,14,14,2026-09-05,2026-09-05,0,0,7,2026-09-20,2026-09-20,0,0,2026-10-01,2026-10-01,0,0,56,No,Completed,Batch 1k order #${i}`);
+}
+const large1000Csv = large1000Rows.join('\r\n');
+const start1kTime = Date.now();
+const scale1000Result = parseAndValidateCsv(large1000Csv, [], [], [], 'System Admin');
+const elapsed1kMs = Date.now() - start1kTime;
+
+console.log(`  ⏱️ Processed and planned 1,000 full orders (14,000 milestones) in ${elapsed1kMs}ms`);
+assert(scale1000Result.isValid === true, `1,000-order high volume CSV parses with valid status (errors: ${scale1000Result.errors.join(', ')})`);
+assert(scale1000Result.previewPOs.length === 1000, `Extracted and planned exactly 1,000 POs (got ${scale1000Result.previewPOs.length})`);
+assert(scale1000Result.totalProductLines === 1000, `Extracted 1,000 product lines (got ${scale1000Result.totalProductLines})`);
+assert(elapsed1kMs < 4000, `1,000-order throughput meets real-time SLA under 4 seconds (took ${elapsed1kMs}ms)`);
+
 console.log('\n================================================================');
 const successRate = totalTests === 0 ? 0 : Math.round((passedTests / totalTests) * 100);
 console.log(`${passedTests === totalTests ? '🎉' : '⚠️'} TEST SUMMARY: ${passedTests}/${totalTests} TESTS PASSED (${successRate}% SUCCESS RATE)`);

@@ -9,11 +9,13 @@ import {
   Layers,
   Wrench,
   ShieldAlert,
-  XCircle
+  XCircle,
+  FileSpreadsheet
 } from 'lucide-react';
 import type { PurchaseOrder } from '../../types';
 import { getPOManufacturingStatus } from '../../utils/statusUtils';
 import { BaselineRevisionModal } from '../modals/BaselineRevisionModal';
+import { BulkImportModal } from '../modals/BulkImportModal';
 
 interface DashboardModuleProps {
   onSelectPO: (po: PurchaseOrder) => void;
@@ -28,6 +30,7 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
 }) => {
   const { purchaseOrders, activeRole } = useApp();
   const [baselinePOState, setBaselinePOState] = useState<PurchaseOrder | null>(null);
+  const [showBulkImportModal, setShowBulkImportModal] = useState(false);
 
   const isPMRole = activeRole === 'Project Manager (PM Baseline)';
   const isAdmin = activeRole === 'Project Management';
@@ -57,15 +60,26 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
           </p>
         </div>
 
-        {activeRole === 'Sales / AE (Customer PO)' && (
+        <div className="flex items-center gap-2.5 shrink-0">
           <button
-            onClick={() => onNavigateModule('1. Customer Purchase Order (PO)')}
-            className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer group shrink-0"
+            onClick={() => setShowBulkImportModal(true)}
+            className="px-3.5 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-2 cursor-pointer border border-white/20"
+            title="Bulk import orders and milestone dates from Excel/CSV"
           >
-            <FilePlus2 className="w-4 h-4 text-emerald-200 group-hover:scale-110 transition-transform" />
-            <span>+ Add New Order</span>
+            <FileSpreadsheet className="w-4 h-4 text-emerald-300" />
+            <span>Bulk Import (CSV / Excel)</span>
           </button>
-        )}
+
+          {activeRole === 'Sales / AE (Customer PO)' && (
+            <button
+              onClick={() => onNavigateModule('1. Customer Purchase Order (PO)')}
+              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer group shrink-0"
+            >
+              <FilePlus2 className="w-4 h-4 text-emerald-200 group-hover:scale-110 transition-transform" />
+              <span>+ Add New Order</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Simplified Status Summary Cards */}
@@ -313,6 +327,13 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
           isOpen={!!baselinePOState}
           onClose={() => setBaselinePOState(null)}
           po={baselinePOState}
+        />
+      )}
+
+      {showBulkImportModal && (
+        <BulkImportModal
+          isOpen={showBulkImportModal}
+          onClose={() => setShowBulkImportModal(false)}
         />
       )}
 
