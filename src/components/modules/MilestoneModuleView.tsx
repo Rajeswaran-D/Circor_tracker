@@ -307,17 +307,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
         return;
       }
       setSuccessMessage(`Stage ${stageTitle} marked as Completed for ${targetLine.productName}.`);
-
-      // If this was the final milestone or all lines are now completed, prompt for PO Closure
-      const currentPO = purchaseOrders.find(p => p.id === poId);
-      if (currentPO && !currentPO.isClosed) {
-        const isOrderComplete = currentPO.productLines.every(l =>
-          l.milestones.every(m => (l.id === lineId && m.key === key) ? true : (m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100))
-        );
-        if (isOrderComplete) {
-          setTimeout(() => setClosingPO(currentPO), 600);
-        }
-      }
+      setTimeout(() => setSuccessMessage(null), 5000);
     } else {
       const effectiveStartDate = formData.startDate || todayStr;
       const delayReasonToUse = formData.delayReason.trim() || undefined;
@@ -525,16 +515,6 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
     } else {
       setSuccessMessage(`Successfully ${eventType === 'start' ? 'started' : 'completed'} stage ${stageTitle} for all ${itemsToUpdate.length} product lines in ${targetPO.poNumber}!`);
       setTimeout(() => setSuccessMessage(null), 5000);
-
-      // If batch completing stage 14 or completing all milestones across all products, prompt order closure
-      if (eventType === 'complete' && !targetPO.isClosed) {
-        const isOrderComplete = targetPO.productLines.every(l =>
-          l.milestones.every(m => m.key === stageKey ? true : (m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100))
-        );
-        if (isOrderComplete || stageOrder === 14) {
-          setTimeout(() => setClosingPO(targetPO), 600);
-        }
-      }
       setBatchModal(prev => ({ ...prev, isOpen: false }));
     }
   };

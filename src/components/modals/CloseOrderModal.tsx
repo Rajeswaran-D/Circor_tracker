@@ -16,15 +16,17 @@ export const CloseOrderModal: React.FC<CloseOrderModalProps> = ({
   po,
   onSuccess
 }) => {
-  const { closePurchaseOrder, activeRole } = useApp();
+  const { purchaseOrders, closePurchaseOrder, activeRole } = useApp();
   const [closureNotes, setClosureNotes] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
 
-  if (!isOpen || !po) return null;
+  const currentPO = (po ? purchaseOrders.find(p => p.id === po.id) : null) || po;
+
+  if (!isOpen || !currentPO) return null;
 
   const isAuthorized = activeRole === 'Project Management' || activeRole === 'Project Manager (PM Baseline)';
-  const totalQty = po.productLines.reduce((acc, l) => acc + (l.qty || 1), 0);
-  const allMilestonesComplete = po.productLines.length > 0 && po.productLines.every(line =>
+  const totalQty = currentPO.productLines.reduce((acc, l) => acc + (l.qty || 1), 0);
+  const allMilestonesComplete = currentPO.productLines.length > 0 && currentPO.productLines.every(line =>
     line.milestones.every(m => m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100)
   );
 
@@ -45,7 +47,7 @@ export const CloseOrderModal: React.FC<CloseOrderModalProps> = ({
     }
 
     const notesToUse = closureNotes.trim() || 'Order delivered and verified across all product lines. Formally closed.';
-    const result = closePurchaseOrder(po.id, notesToUse, `${activeRole} User`);
+    const result = closePurchaseOrder(currentPO.id, notesToUse, `${activeRole} User`);
 
     if (result.success) {
       if (onSuccess) onSuccess();
@@ -67,15 +69,15 @@ export const CloseOrderModal: React.FC<CloseOrderModalProps> = ({
                 FINAL ORDER ACTION
               </span>
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-white/10 text-slate-200">
-                {po.productLines.length} Product Line{po.productLines.length !== 1 ? 's' : ''} ({totalQty} Pcs)
+                {currentPO.productLines.length} Product Line{currentPO.productLines.length !== 1 ? 's' : ''} ({totalQty} Pcs)
               </span>
             </div>
             <h2 className="text-lg font-black tracking-tight text-white flex items-center gap-2">
               <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-              Close Purchase Order: {po.poNumber}
+              Close Purchase Order: {currentPO.poNumber}
             </h2>
             <p className="text-xs text-slate-300 mt-0.5">
-              Customer: <strong className="text-white">{po.customerName}</strong>
+              Customer: <strong className="text-white">{currentPO.customerName}</strong>
             </p>
           </div>
           <button
@@ -102,7 +104,7 @@ export const CloseOrderModal: React.FC<CloseOrderModalProps> = ({
                 <AlertTriangle className="w-4 h-4 text-amber-600" /> Unfinished Stages Detected
               </div>
               <p className="text-[11px] text-amber-800">
-                Some milestones across the {po.productLines.length} product lines are not yet marked as Completed. All stages must be completed before archiving.
+                Some milestones across the {currentPO.productLines.length} product lines are not yet marked as Completed. All stages must be completed before archiving.
               </p>
             </div>
           ) : (
@@ -122,7 +124,7 @@ export const CloseOrderModal: React.FC<CloseOrderModalProps> = ({
             <div className="flex items-center justify-between font-bold text-slate-900 text-xs border-b border-slate-200 pb-2">
               <span className="flex items-center gap-2">
                 <Package className="w-4 h-4 text-emerald-700" />
-                Product Lines Status ({po.productLines.length})
+                Product Lines Status ({currentPO.productLines.length})
               </span>
               <span className="text-[10px] font-mono text-emerald-800 font-bold bg-emerald-100 px-2 py-0.5 rounded">
                 100% Stages Finished
@@ -130,7 +132,7 @@ export const CloseOrderModal: React.FC<CloseOrderModalProps> = ({
             </div>
 
             <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
-              {po.productLines.map(line => {
+              {currentPO.productLines.map(line => {
                 const compStages = line.milestones.filter(m => m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100).length;
                 const totalStages = line.milestones.length || 14;
                 const isLineDone = compStages >= totalStages;
