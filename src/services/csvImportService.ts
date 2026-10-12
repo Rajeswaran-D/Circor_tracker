@@ -229,6 +229,7 @@ export function generateCsvTemplate(): string {
     'Customer Name',
     'Customer PO Ref',
     'Customer PO Date',
+    'Booked Amount',
     'Contractual Delivery Date',
     'Product Name',
     'Design Type',
@@ -259,6 +260,7 @@ export function generateCsvTemplate(): string {
       'Saudi Aramco',
       'ARAMCO-PO-9901',
       '2026-09-10',
+      '150000',
       '2026-11-20',
       'CFT-HV-100 Gate Valve 2 inch 600#',
       'Existing Design',
@@ -286,6 +288,7 @@ export function generateCsvTemplate(): string {
       'Saudi Aramco',
       'ARAMCO-PO-9901',
       '2026-09-10',
+      '150000',
       '2026-11-20',
       'CFT-HV-200 Gate Valve 3 inch 900#',
       'Existing Design',
@@ -314,6 +317,7 @@ export function generateCsvTemplate(): string {
       'ExxonMobil Upstream',
       'EXXON-PROJ-442',
       '2026-09-28',
+      '250000',
       '2027-01-15',
       'Custom Engineered 4 inch Class 1500 Subsea Choke Valve',
       'New Design',
@@ -342,6 +346,7 @@ export function generateCsvTemplate(): string {
       'Shell LNG Global',
       'SHELL-2026-019',
       '2026-08-01',
+      '95000',
       '2026-10-15',
       'CFT-EMF-100 Electromagnetic Flowmeter DN50',
       'Existing Design',
@@ -501,6 +506,7 @@ export function parseAndValidateCsv(
   const poRefIdx = getColIdx(['Customer PO Ref', 'PO Reference', 'Customer Ref', 'PO Ref', 'PO NO']);
   const poDateIdx = getColIdx(['Customer PO Date', 'PO Date', 'Order Date', 'Date']);
   const delDateIdx = getColIdx(['Contractual Delivery Date', 'Delivery Date', 'Target Delivery Date', 'Promised Date', 'COTD']);
+  const bookedAmtIdx = getColIdx(['Booked Amount', 'BookedAmount', 'Booked Amount ($)', 'Booked Amount (USD)', 'Order Value', 'Amount', 'Value']);
   const prodNameIdx = getColIdx(['Product Name', 'Product', 'Product Line', 'Scope', 'Item Description', 'Description', 'Valve Type']);
   const categoryIdx = getColIdx(['Category', 'Product Category']);
   const designTypeIdx = getColIdx(['Design Type', 'Design']);
@@ -589,6 +595,7 @@ export function parseAndValidateCsv(
     customerName: string;
     customerPoRef: string;
     poDate: string;
+    bookedAmount?: number;
     deliveryDate?: string;
     lines: RawLineItem[];
   }
@@ -612,6 +619,8 @@ export function parseAndValidateCsv(
     const customerPoRef = poRefIdx !== -1 ? row[poRefIdx]?.trim() : '';
     const rawPoDate = poDateIdx !== -1 ? row[poDateIdx] : '';
     const poDate = normalizeCsvDate(rawPoDate);
+    const rawBookedAmt = bookedAmtIdx !== -1 ? row[bookedAmtIdx]?.trim() : '';
+    const parsedBookedAmt = rawBookedAmt ? parseFloat(rawBookedAmt.replace(/[^0-9.-]+/g, '')) : undefined;
     const rawProdName = prodNameIdx !== -1 ? row[prodNameIdx]?.trim() : '';
     const productName = rawProdName;
     const rawCategory = categoryIdx !== -1 ? row[categoryIdx]?.trim() : '';
@@ -756,6 +765,7 @@ export function parseAndValidateCsv(
           customerName,
           customerPoRef: customerPoRef || `PO-REF-${poNumber}`,
           poDate,
+          bookedAmount: parsedBookedAmt !== undefined && !isNaN(parsedBookedAmt) ? parsedBookedAmt : undefined,
           deliveryDate,
           lines: []
         });
@@ -883,7 +893,7 @@ export function parseAndValidateCsv(
           if (m.committedBaselineEndDate && actualEnd > m.committedBaselineEndDate) {
             const diff = getDaysDifference(m.committedBaselineEndDate, actualEnd);
             if (diff > 0) {
-              delayReason = rawLine.remarks || `Completed with +${diff}d schedule variance`;
+              delayReason = (rawLine.remarks && rawLine.remarks.trim()) ? rawLine.remarks.trim() : m.name;
               delayCategory = (m.key === 'sub_supplier_po' || m.key === 'material_receipt')
                 ? 'Supplier'
                 : (m.key === 'corb_release' || m.key === 'bom_release')
@@ -927,8 +937,7 @@ export function parseAndValidateCsv(
           runningChainDate = stageForecastEnd;
 
           if (m.committedBaselineEndDate && stageForecastEnd > m.committedBaselineEndDate) {
-            const diff = getDaysDifference(m.committedBaselineEndDate, stageForecastEnd);
-            delayReason = rawLine.remarks || `Material arrival forecast with +${diff}d delay`;
+            delayReason = (rawLine.remarks && rawLine.remarks.trim()) ? rawLine.remarks.trim() : m.name;
             delayCategory = 'Supplier';
           }
 
@@ -950,8 +959,7 @@ export function parseAndValidateCsv(
           runningChainDate = stageForecastEnd;
 
           if (m.committedBaselineEndDate && stageForecastEnd > m.committedBaselineEndDate) {
-            const diff = getDaysDifference(m.committedBaselineEndDate, stageForecastEnd);
-            delayReason = rawLine.remarks || `In-progress milestone with +${diff}d forecast delay`;
+            delayReason = (rawLine.remarks && rawLine.remarks.trim()) ? rawLine.remarks.trim() : m.name;
             delayCategory = 'Production';
           }
 
@@ -1031,6 +1039,7 @@ export function parseAndValidateCsv(
       customerName: group.customerName,
       customerPoRef: group.customerPoRef,
       poDate: effectivePoDate,
+      bookedAmount: group.bookedAmount,
       contractReviewRef: `CR-IMP-${poNum}`,
       committedDeliveryDate: poDeliveryDate,
       revisedDeliveryDate: finalRevisedDeliveryDate,

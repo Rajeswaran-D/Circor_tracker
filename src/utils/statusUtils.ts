@@ -24,7 +24,7 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
   if (!po.productLines || po.productLines.length === 0) {
     return {
       currentStageKey: 'po_from_customer',
-      currentStageName: '1. Customer PO Review & Intake',
+      currentStageName: '1. Customer Purchase Order (PO)',
       statusTag: 'In Progress',
       progressPercent: 0,
       completedStagesCount: 0,
@@ -96,7 +96,11 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
     ? getDaysDifference(po.committedDeliveryDate, po.revisedDeliveryDate)
     : 0;
 
-  const totalCalculatedDelay = Math.max(0, maxPOVariance, ...lineDelays, poDateDiff);
+  const actualDeliveryDiff = (po.actualDeliveryDate && po.committedDeliveryDate && po.actualDeliveryDate > po.committedDeliveryDate)
+    ? getDaysDifference(po.committedDeliveryDate, po.actualDeliveryDate)
+    : 0;
+
+  const totalCalculatedDelay = Math.max(0, maxPOVariance, ...lineDelays, poDateDiff, actualDeliveryDiff);
 
   // Find all stages that actually introduced a delay (stageDelta > 0 or explicit delay reason with positive variance)
   const delayOriginEntries: Array<{
@@ -108,12 +112,26 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
   }> = [];
 
   po.productLines.forEach(pLine => {
-    const mList = pLine.milestones || [];
+    const mList = [...(pLine.milestones || [])].sort((a, b) => a.stageOrder - b.stageOrder);
     for (let i = 0; i < mList.length; i++) {
       const ms = mList[i];
       const prev = i > 0 ? mList[i - 1] : null;
-      const currVar = Math.max(0, typeof ms.varianceDays === 'number' ? ms.varianceDays : 0);
-      const prevVar = prev ? Math.max(0, typeof prev.varianceDays === 'number' ? prev.varianceDays : 0) : 0;
+      const currVar = Math.max(
+        0,
+        typeof ms.varianceDays === 'number' ? ms.varianceDays : 0,
+        (ms.actualEndDate && ms.committedBaselineEndDate && ms.actualEndDate > ms.committedBaselineEndDate)
+          ? getDaysDifference(ms.committedBaselineEndDate, ms.actualEndDate)
+          : 0
+      );
+      const prevVar = prev
+        ? Math.max(
+            0,
+            typeof prev.varianceDays === 'number' ? prev.varianceDays : 0,
+            (prev.actualEndDate && prev.committedBaselineEndDate && prev.actualEndDate > prev.committedBaselineEndDate)
+              ? getDaysDifference(prev.committedBaselineEndDate, prev.actualEndDate)
+              : 0
+          )
+        : 0;
       const delta = currVar - prevVar;
       const hasExplicitReason = Boolean(ms.delayReason) && !ms.delayReason?.startsWith('Inherited') && !ms.delayReason?.startsWith('Cascaded');
 
@@ -137,10 +155,10 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
   const entryWithMaxDelta = [...delayOriginEntries].sort((a, b) => b.delta - a.delta)[0];
   const rootDelayEntry = entryWithExplicitReason || entryWithMaxDelta || delayOriginEntries[0];
 
-  let stageName = activeMilestone ? getStageFriendlyName(activeMilestone.key, line) : '1. Customer PO Intake';
+  let stageName = activeMilestone ? getStageFriendlyName(activeMilestone.key, line) : '1. Customer Purchase Order (PO)';
 
   if (isOrderFinished) {
-    stageName = '14. Delivered & Completed';
+    stageName = '14. Final Shipment & Dispatch';
   }
 
   const statusTag: MilestoneStatus = isOrderFinished 
@@ -166,7 +184,9 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
 
   const delayReason = (rootDelayEntry?.delayReason && !rootDelayEntry.delayReason.startsWith('Inherited'))
     ? rootDelayEntry.delayReason
-    : (line.delayReason && !line.delayReason.startsWith('Inherited') ? line.delayReason : undefined);
+    : (line.delayReason && !line.delayReason.startsWith('Inherited')
+      ? line.delayReason
+      : (rootDelayEntry ? rootDelayEntry.milestone.name : (delayedStageName || activeMilestone?.name)));
 
   const lastRevNum = (po.revisions && po.revisions.length > 0) ? po.revisions.length - 1 : 0;
 

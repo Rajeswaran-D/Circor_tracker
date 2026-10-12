@@ -23,7 +23,7 @@ import { OrderProgressOverview } from '../common/OrderProgressOverview';
 import { DelayAnalysisFlow } from '../common/DelayAnalysisFlow';
 
 const ALL_14_STAGES = [
-  { key: 'po_from_customer', label: '1. PO Intake' },
+  { key: 'po_from_customer', label: '1. Customer PO' },
   { key: 'pm_baseline', label: '2. PM Baseline' },
   { key: 'corb_release', label: '3. CORB' },
   { key: 'bom_release', label: '4. BOM' },
@@ -151,6 +151,9 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
                 Customer: <span className="font-semibold text-slate-800">{po.customerName}</span> | Ref: {po.customerPoRef}
+                {po.bookedAmount !== undefined && (
+                  <> | Booked: <span className="font-mono font-bold text-emerald-800">${Number(po.bookedAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></>
+                )}
               </p>
             </div>
 

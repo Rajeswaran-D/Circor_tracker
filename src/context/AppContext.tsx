@@ -1835,6 +1835,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       customerName: newPoData.customerName || 'General Offshore Client',
       customerPoRef: newPoData.customerPoRef || 'PO-REF-9901',
       poDate: effectivePoDate,
+      bookedAmount: typeof newPoData.bookedAmount === 'number' ? newPoData.bookedAmount : (newPoData.bookedAmount ? parseFloat(String(newPoData.bookedAmount)) : undefined),
       contractReviewRef: newPoData.contractReviewRef || 'CR-2026-0900',
       committedDeliveryDate: poDeliveryDate,
       revisedDeliveryDate: poDeliveryDate,

@@ -29,6 +29,7 @@ CREATE TABLE purchase_orders (
   customer_name VARCHAR(255) NOT NULL,
   customer_po_ref VARCHAR(120) NOT NULL,
   po_date DATE NOT NULL,
+  booked_amount DECIMAL(15, 2) NULL,
   contract_review_ref VARCHAR(120) NOT NULL,
   committed_delivery_date DATE NOT NULL,
   revised_delivery_date DATE NOT NULL,

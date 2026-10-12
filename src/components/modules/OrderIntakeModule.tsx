@@ -53,6 +53,7 @@ export const OrderIntakeModule: React.FC = () => {
   const [customerName, setCustomerName] = useState("");
   const [customPoNumber, setCustomPoNumber] = useState("");
   const [customerPoRef, setCustomerPoRef] = useState("");
+  const [bookedAmount, setBookedAmount] = useState("");
   const [lines, setLines] = useState<ProductLineInput[]>([emptyLine()]);
   const [expandedPO, setExpandedPO] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
@@ -87,6 +88,7 @@ export const OrderIntakeModule: React.FC = () => {
     setCustomerName("");
     setCustomPoNumber("");
     setCustomerPoRef("");
+    setBookedAmount("");
     setCommittedDeliveryDate("");
     setLines([emptyLine()]);
     setCreatedPOId(null);
@@ -154,11 +156,13 @@ export const OrderIntakeModule: React.FC = () => {
 
   const handleCreate = () => {
     if (!validate()) return;
+    const cleanAmount = bookedAmount.trim() ? parseFloat(bookedAmount.replace(/[^0-9.-]+/g, '')) : undefined;
     const result = createPurchaseOrder({
       poNumber: customPoNumber.trim(),
       customerName: customerName.trim(),
       customerPoRef: customerPoRef.trim() || `PO-REF-${Date.now()}`,
       poDate: poStartDate || today,
+      bookedAmount: cleanAmount !== undefined && !isNaN(cleanAmount) ? cleanAmount : undefined,
       contractReviewRef: `CR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
       committedDeliveryDate: committedDeliveryDate.trim() || undefined,
       productLines: lines.map((l) => {
@@ -274,7 +278,7 @@ export const OrderIntakeModule: React.FC = () => {
             {step === "details" && (
               <div className="space-y-6">
                 {/* Customer Info & Order Schedule Dates */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1.5">Customer Name *</label>
                     <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="e.g. Petrobras Offshore Ltd." className="w-full px-3.5 py-2.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-emerald-500 bg-white" />
@@ -314,6 +318,22 @@ export const OrderIntakeModule: React.FC = () => {
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1.5">Customer PO Reference</label>
                     <input value={customerPoRef} onChange={(e) => setCustomerPoRef(e.target.value)} placeholder="e.g. PO-4500981223" className="w-full px-3.5 py-2.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-emerald-500 bg-white" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">Booked Amount ($)</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-sm">$</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={bookedAmount}
+                        onChange={(e) => setBookedAmount(e.target.value)}
+                        placeholder="e.g. 150000"
+                        className="w-full pl-7 pr-3.5 py-2.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:border-emerald-500 bg-white font-mono"
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1 font-mono">Contract / Order value</p>
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
@@ -492,6 +512,14 @@ export const OrderIntakeModule: React.FC = () => {
                       <div className="flex justify-between"><span className="text-slate-500">PO Number</span><span className="font-mono font-bold text-emerald-900">{customPoNumber}</span></div>
                       <div className="flex justify-between"><span className="text-slate-500">Customer</span><span className="font-semibold text-slate-900">{customerName}</span></div>
                       {customerPoRef && <div className="flex justify-between"><span className="text-slate-500">Cust. PO Ref</span><span className="font-mono text-slate-700">{customerPoRef}</span></div>}
+                      {bookedAmount && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Booked Amount</span>
+                          <span className="font-mono font-bold text-emerald-800">
+                            ${Number(bookedAmount.replace(/[^0-9.-]+/g, '')).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      )}
                       <div className="flex justify-between"><span className="text-slate-500">Total Lines</span><span className="font-bold text-slate-900">{lines.length} Product(s)</span></div>
                       <div className="flex justify-between border-t border-slate-200 pt-2.5"><span className="text-slate-500">Order Start Date</span><span className="font-mono text-slate-700 font-bold">{poStartDate || today}</span></div>
                       {committedDeliveryDate && (
@@ -620,6 +648,9 @@ export const OrderIntakeModule: React.FC = () => {
                   </div>
                   <div className="text-xs text-slate-500 flex items-center gap-4">
                     <span>Cust. Ref: <strong className="text-slate-700">{po.customerPoRef || "N/A"}</strong></span>
+                    {po.bookedAmount !== undefined && (
+                      <span>Booked: <strong className="text-emerald-800 font-mono font-bold">${Number(po.bookedAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+                    )}
                     <span>Lines: <strong className="text-slate-700">{po.productLines.length}</strong></span>
                     <span>Delivery: <strong className="text-emerald-700 font-mono">{po.committedDeliveryDate}</strong></span>
                   </div>
@@ -672,6 +703,11 @@ export const OrderIntakeModule: React.FC = () => {
                       <span className="font-mono font-bold text-emerald-800 text-sm">{po.poNumber}</span>
                       <span className="font-semibold text-slate-900">{po.customerName}</span>
                       <span className="text-xs text-slate-500">{po.productLines.length} line{po.productLines.length !== 1 ? "s" : ""}</span>
+                      {po.bookedAmount !== undefined && (
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-mono font-bold">
+                          ${Number(po.bookedAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-4">
                       <div className="text-right text-xs">

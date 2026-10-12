@@ -81,16 +81,20 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
   const activeIndex = milestones.findIndex(m => m.key === activeMs?.key);
 
   const rawStages = [
-    { key: 'po_from_customer',      name: '1. Customer PO Intake' },
-    { key: 'pm_baseline',           name: '2. PM Baseline & Plan' },
+    { key: 'po_from_customer',      name: '1. Customer Purchase Order (PO)' },
+    { key: 'pm_baseline',           name: '2. Baseline Review & Planning' },
     { key: 'corb_release',          name: '3. CORB Release' },
     { key: 'bom_release',           name: '4. BOM Release' },
-    { key: 'wo_release',            name: '5. Work Order Release' },
+    { key: 'wo_release',            name: '5. Work Order (WO) Release' },
+    { key: 'sub_supplier_po',       name: '6. Sub-Supplier PO' },
     { key: 'material_receipt',      name: '7. Material Receipt (GRN)' },
-    { key: 'machining',             name: '8. Machining' },
-    { key: 'assembly',              name: '9. Assembly & Testing' },
-    { key: 'qc_pass',               name: '10. Quality Control & Inspection' },
-    { key: 'shipment',              name: '11. Final Shipment & Dispatch' },
+    { key: 'machining',             name: '8. Machining & Fabrication' },
+    { key: 'assembly',              name: '9. Assembly' },
+    { key: 'fg',                    name: '10. Finished Goods (FG)' },
+    { key: 'customer_inspection',   name: '11. Customer Inspection' },
+    { key: 'painting',              name: '12. Painting' },
+    { key: 'trn',                   name: '13. TRN' },
+    { key: 'shipment',              name: '14. Final Shipment & Dispatch' },
   ];
 
   const rolePerms = ROLE_PERMISSIONS[activeRole];

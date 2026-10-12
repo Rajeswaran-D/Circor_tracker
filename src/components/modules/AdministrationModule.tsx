@@ -16,9 +16,11 @@ import {
   X,
   Edit3,
   RotateCcw,
-  Lock
+  Lock,
+  BarChart3
 } from 'lucide-react';
 import { ProductCatalogModule } from './ProductCatalogModule';
+import { YearlyCompletedOrdersReport } from './YearlyCompletedOrdersReport';
 import { getPOManufacturingStatus } from '../../utils/statusUtils';
 import type { PurchaseOrder, CategoryTemplate } from '../../types';
 
@@ -40,7 +42,7 @@ export const AdministrationModule: React.FC<AdministrationModuleProps> = ({ onSe
     pendingCancellationCount
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'history' | 'requests' | 'governance' | 'catalog'>('history');
+  const [activeTab, setActiveTab] = useState<'history' | 'reports' | 'requests' | 'governance' | 'catalog'>('history');
   const [atRiskDays, setAtRiskDays] = useState(config.atRiskThresholdDays);
   const [delayedDays, setDelayedDays] = useState(config.delayedThresholdDays);
   
@@ -244,6 +246,18 @@ export const AdministrationModule: React.FC<AdministrationModuleProps> = ({ onSe
         >
           <History className="w-4 h-4" />
           <span>Complete Orders History & Archive</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('reports')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
+            activeTab === 'reports'
+              ? 'bg-emerald-700 text-white shadow-xs'
+              : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+          }`}
+        >
+          <BarChart3 className="w-4 h-4" />
+          <span>Annual Performance & Insights</span>
         </button>
 
         <button
@@ -499,6 +513,11 @@ export const AdministrationModule: React.FC<AdministrationModuleProps> = ({ onSe
           </div>
 
         </div>
+      )}
+
+      {/* TAB: ANNUAL PERFORMANCE & EXECUTIVE INSIGHTS */}
+      {activeTab === 'reports' && (
+        <YearlyCompletedOrdersReport onSelectPO={onSelectPO} />
       )}
 
       {/* TAB 2: CANCELLATION & DELETE REQUESTS */}

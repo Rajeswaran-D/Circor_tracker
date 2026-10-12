@@ -22,6 +22,7 @@ export const PurchaseOrdersModule: React.FC<PurchaseOrdersModuleProps> = ({ onSe
   const [newCustomer, setNewCustomer] = useState('');
   const [newPoRef, setNewPoRef] = useState('');
   const [newContractRef, setNewContractRef] = useState('');
+  const [newBookedAmount, setNewBookedAmount] = useState('');
   const [productName, setProductName] = useState('');
   const [category, setCategory] = useState(templates[0]?.categoryName || 'High-Pressure Control Valves');
   const [designType, setDesignType] = useState<DesignType>('New Design');
@@ -51,10 +52,12 @@ export const PurchaseOrdersModule: React.FC<PurchaseOrdersModuleProps> = ({ onSe
     }
 
     setCreateError('');
+    const parsedBooked = newBookedAmount.trim() ? parseFloat(newBookedAmount.replace(/[^0-9.-]+/g, '')) : undefined;
     const res = createPurchaseOrder({
       poNumber: newPoNumber.trim() || undefined,
       customerName: newCustomer,
       customerPoRef: newPoRef || `PO-REF-${Math.floor(1000 + Math.random() * 9000)}`,
+      bookedAmount: parsedBooked !== undefined && !isNaN(parsedBooked) ? parsedBooked : undefined,
       contractReviewRef: newContractRef || `CR-2026-${Math.floor(100 + Math.random() * 900)}`,
       productLines: [
         {
@@ -80,6 +83,9 @@ export const PurchaseOrdersModule: React.FC<PurchaseOrdersModuleProps> = ({ onSe
     setShowCreateModal(false);
     setNewPoNumber('');
     setNewCustomer('');
+    setNewPoRef('');
+    setNewContractRef('');
+    setNewBookedAmount('');
     setProductName('');
     setCreateError('');
   };
@@ -193,7 +199,14 @@ export const PurchaseOrdersModule: React.FC<PurchaseOrdersModuleProps> = ({ onSe
                         <div className="text-[10px] text-slate-400 font-normal">Created by {po.createdBy}</div>
                       </td>
                       <td className="py-3.5 px-4 text-slate-900 font-semibold">{po.customerName}</td>
-                      <td className="py-3.5 px-4 text-slate-500 font-mono">{po.contractReviewRef}</td>
+                      <td className="py-3.5 px-4 text-slate-500 font-mono">
+                        <div>{po.contractReviewRef}</div>
+                        {po.bookedAmount !== undefined && (
+                          <div className="text-[10px] text-emerald-800 font-bold font-mono">
+                            ${Number(po.bookedAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </div>
+                        )}
+                      </td>
                       <td className="py-3.5 px-4 text-slate-800">
                         <div className="font-semibold text-slate-900">{firstLine?.productName}</div>
                         <div className="text-[10px] text-slate-500">{po.productLines.length} Line(s) • Qty {firstLine?.qty}</div>
@@ -304,7 +317,7 @@ export const PurchaseOrdersModule: React.FC<PurchaseOrdersModuleProps> = ({ onSe
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-slate-700 mb-1">Customer PO Ref *</label>
                   <input
@@ -313,6 +326,18 @@ export const PurchaseOrdersModule: React.FC<PurchaseOrdersModuleProps> = ({ onSe
                     placeholder="PO-SHELL-99120"
                     value={newPoRef}
                     onChange={(e) => setNewPoRef(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-700 mb-1">Booked Amount ($)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="e.g. 150000"
+                    value={newBookedAmount}
+                    onChange={(e) => setNewBookedAmount(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 font-mono"
                   />
                 </div>

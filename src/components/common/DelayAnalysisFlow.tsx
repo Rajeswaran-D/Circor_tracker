@@ -95,13 +95,13 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
         isRecovery: false,
         isAdditionalDelay: true,
         delayCategory: ms.delayCategory,
-        delayReason: ms.delayReason,
+        delayReason: (ms.delayReason && ms.delayReason.trim()) ? ms.delayReason.trim() : ms.name,
         plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
         actualDates: { start: actualStart, end: actualEnd, duration: actualDuration },
         productLineName: line.productName,
         lineNumber: line.lineNumber,
         productLineId: line.id,
-        affectedProducts: [{ lineId: line.id, lineNumber: line.lineNumber, productName: line.productName, varianceDays: activeVariance, delayReason: ms.delayReason }]
+        affectedProducts: [{ lineId: line.id, lineNumber: line.lineNumber, productName: line.productName, varianceDays: activeVariance, delayReason: (ms.delayReason && ms.delayReason.trim()) ? ms.delayReason.trim() : ms.name }]
       };
 
       delaySteps.push(step);
@@ -156,13 +156,13 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
           isRecovery: false,
           isAdditionalDelay: true,
           delayCategory: ms.delayCategory,
-          delayReason: ms.delayReason,
+          delayReason: (ms.delayReason && ms.delayReason.trim()) ? ms.delayReason.trim() : ms.name,
           plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
           actualDates: { start: actualStart, end: actualEnd, duration: actualDuration },
           productLineName: line.productName,
           lineNumber: line.lineNumber,
           productLineId: line.id,
-          affectedProducts: [{ lineId: line.id, lineNumber: line.lineNumber, productName: line.productName, varianceDays: activeVariance, delayReason: ms.delayReason }]
+          affectedProducts: [{ lineId: line.id, lineNumber: line.lineNumber, productName: line.productName, varianceDays: activeVariance, delayReason: (ms.delayReason && ms.delayReason.trim()) ? ms.delayReason.trim() : ms.name }]
         };
 
         delaySteps.push(step);

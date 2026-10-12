@@ -566,6 +566,7 @@ assert(importResult.previewPOs.length === 3, `Imported exactly 3 sample POs from
 const aramcoPO = importResult.previewPOs.find(p => p.poNumber === 'PO-2026-801');
 assert(aramcoPO !== undefined, 'Found imported Saudi Aramco PO');
 assert(aramcoPO!.productLines.length === 2, `Saudi Aramco PO contains 2 product lines (got ${aramcoPO?.productLines.length})`);
+assert(aramcoPO!.bookedAmount === 150000, `Saudi Aramco PO bookedAmount matches template (got ${aramcoPO?.bookedAmount})`);
 
 const aramcoLine1 = aramcoPO!.productLines[0];
 assert(aramcoLine1.materials.length > 0, 'Line 1 has raw materials initialized');
@@ -591,6 +592,7 @@ assert(book2Result.previewPOs.length === 1, `2-tier Book2 parser extracts 1 PO (
 const qatarPO = book2Result.previewPOs[0];
 assert(qatarPO.poNumber === 'PO-QE-991', `Extracted correct PO NO from Book2 format (got ${qatarPO.poNumber})`);
 assert(qatarPO.customerName === 'Qatar Energy', `Extracted correct Customer Name (got ${qatarPO.customerName})`);
+assert(qatarPO.bookedAmount === 150000, `Extracted correct Booked Amount from Book2 format (got ${qatarPO.bookedAmount})`);
 assert(qatarPO.productLines[0].productName === 'DN100 High Pressure Control Valve', `Extracted correct Scope/Product Name (got ${qatarPO.productLines[0].productName})`);
 assert(book2Result.previewRows[0].completedStagesCount === 14, `Preview row correctly calculates 14 completed stages (got ${book2Result.previewRows[0].completedStagesCount})`);
 assert(book2Result.previewRows[0].currentActiveStageName.includes('14. Final Shipment'), `Preview row accurately displays Stage 14 status (got ${book2Result.previewRows[0].currentActiveStageName})`);
@@ -643,6 +645,183 @@ assert(scale1000Result.isValid === true, `1,000-order high volume CSV parses wit
 assert(scale1000Result.previewPOs.length === 1000, `Extracted and planned exactly 1,000 POs (got ${scale1000Result.previewPOs.length})`);
 assert(scale1000Result.totalProductLines === 1000, `Extracted 1,000 product lines (got ${scale1000Result.totalProductLines})`);
 assert(elapsed1kMs < 4000, `1,000-order throughput meets real-time SLA under 4 seconds (took ${elapsed1kMs}ms)`);
+
+// ---------------------------------------------------------------------------
+// GROUP 13: Year-Wise Completed Orders Reporting, OTIF & Bottleneck Analytics
+// ---------------------------------------------------------------------------
+console.log('\n📋 GROUP 13: Year-Wise Completed Orders Reporting, OTIF & Bottleneck Analytics');
+
+// Mock multi-year completed orders
+const mockCompletedOrder2025: PurchaseOrder = {
+  id: 'po-test-2025-01',
+  poNumber: 'PO-HIST-2025-01',
+  customerName: 'PetroChina',
+  customerPoRef: 'PC-2025-99',
+  poDate: '2025-02-01',
+  committedDeliveryDate: '2025-05-15',
+  revisedDeliveryDate: '2025-05-15',
+  actualDeliveryDate: '2025-05-15',
+  bookedAmount: 240000,
+  contractReviewRef: 'CR-2025-01',
+  status: 'Completed',
+  isClosed: true,
+  productLines: [{
+    id: 'line-2025-01',
+    lineNumber: 'LINE-01',
+    productName: 'Cryogenic Ball Valve 6"',
+    category: 'Cryogenic Valves',
+    qty: 5,
+    designType: 'Existing Design',
+    overallVarianceDays: 0,
+    status: 'Completed',
+    milestones: [
+      {
+        id: 'ms-2025-14',
+        key: 'shipment',
+        name: 'Shipment & Dispatch',
+        stageOrder: 14,
+        defaultDurationDays: 3,
+        committedBaselineStartDate: '2025-05-12',
+        committedBaselineEndDate: '2025-05-15',
+        committedDurationDays: 3,
+        actualStartDate: '2025-05-12',
+        actualEndDate: '2025-05-15',
+        forecastStartDate: '2025-05-12',
+        forecastEndDate: '2025-05-15',
+        varianceDays: 0,
+        status: 'Completed',
+        completionPct: 100
+      }
+    ],
+    materials: []
+  }],
+  revisions: [],
+  attachments: [],
+  createdBy: 'Sales',
+  createdAt: '2025-02-01',
+  lastUpdatedBy: 'Stores',
+  lastUpdatedAt: '2025-05-15'
+};
+
+const mockCompletedOrder2026: PurchaseOrder = {
+  id: 'po-test-2026-01',
+  poNumber: 'PO-HIST-2026-01',
+  customerName: 'Aramco Offshore',
+  customerPoRef: 'AR-2026-88',
+  poDate: '2026-03-01',
+  committedDeliveryDate: '2026-06-01',
+  revisedDeliveryDate: '2026-06-12',
+  actualDeliveryDate: '2026-06-12',
+  bookedAmount: 380000,
+  contractReviewRef: 'CR-2026-01',
+  status: 'Completed',
+  isClosed: true,
+  productLines: [{
+    id: 'line-2026-01',
+    lineNumber: 'LINE-01',
+    productName: 'Subsea Choke Valve 4"',
+    category: 'High Pressure Valves',
+    qty: 2,
+    designType: 'New Design',
+    overallVarianceDays: 11,
+    status: 'Completed',
+    milestones: [
+      {
+        id: 'ms-2026-07',
+        key: 'material_receipt',
+        name: 'Material Receipt (GRN)',
+        stageOrder: 7,
+        defaultDurationDays: 14,
+        committedBaselineStartDate: '2026-03-20',
+        committedBaselineEndDate: '2026-04-03',
+        committedDurationDays: 14,
+        actualStartDate: '2026-03-20',
+        actualEndDate: '2026-04-14',
+        forecastStartDate: '2026-03-20',
+        forecastEndDate: '2026-04-14',
+        varianceDays: 11,
+        status: 'Completed',
+        completionPct: 100,
+        delayCategory: 'Supplier',
+        delayReason: 'Forged Body Billet heat-treatment retest delay'
+      },
+      {
+        id: 'ms-2026-14',
+        key: 'shipment',
+        name: 'Shipment & Dispatch',
+        stageOrder: 14,
+        defaultDurationDays: 3,
+        committedBaselineStartDate: '2026-05-29',
+        committedBaselineEndDate: '2026-06-01',
+        committedDurationDays: 3,
+        actualStartDate: '2026-06-09',
+        actualEndDate: '2026-06-12',
+        forecastStartDate: '2026-06-09',
+        forecastEndDate: '2026-06-12',
+        varianceDays: 11,
+        status: 'Completed',
+        completionPct: 100
+      }
+    ],
+    materials: []
+  }],
+  revisions: [
+    {
+      revNumber: 0,
+      requestedBy: 'System',
+      approvedBy: 'Admin',
+      approvedAt: '2026-03-01',
+      reason: 'Initial baseline',
+      docRef: 'REV-0',
+      changes: []
+    },
+    {
+      revNumber: 1,
+      requestedBy: 'Stores',
+      approvedBy: 'Admin',
+      approvedAt: '2026-04-14',
+      reason: 'Raw material receipt delay',
+      docRef: 'REV-1',
+      changes: []
+    }
+  ],
+  attachments: [],
+  createdBy: 'Sales',
+  createdAt: '2026-03-01',
+  lastUpdatedBy: 'Stores',
+  lastUpdatedAt: '2026-06-12'
+};
+
+const allMockCompleted = [mockCompletedOrder2025, mockCompletedOrder2026];
+
+// Test Year 2025 aggregation
+const orders2025 = allMockCompleted.filter(po => {
+  const d = po.actualDeliveryDate || po.committedDeliveryDate;
+  return d.startsWith('2025');
+});
+assert(orders2025.length === 1, `Filtered 2025 completed orders correctly (got ${orders2025.length})`);
+assert(orders2025[0].bookedAmount === 240000, `2025 Booked Amount matches $240,000 (got ${orders2025[0].bookedAmount})`);
+const summary2025 = getPOManufacturingStatus(orders2025[0]);
+assert(summary2025.delayDays === 0, `2025 order has 0d delay (got ${summary2025.delayDays}d)`);
+
+// Test Year 2026 aggregation
+const orders2026 = allMockCompleted.filter(po => {
+  const d = po.actualDeliveryDate || po.committedDeliveryDate;
+  return d.startsWith('2026');
+});
+assert(orders2026.length === 1, `Filtered 2026 completed orders correctly (got ${orders2026.length})`);
+assert(orders2026[0].bookedAmount === 380000, `2026 Booked Amount matches $380,000 (got ${orders2026[0].bookedAmount})`);
+const summary2026 = getPOManufacturingStatus(orders2026[0]);
+assert(summary2026.delayDays === 11, `2026 order has +11d schedule overrun (got ${summary2026.delayDays}d)`);
+assert(Boolean(summary2026.delayedStageName?.includes('Material Receipt')), `2026 delay stage accurately identifies Material Receipt (got ${summary2026.delayedStageName})`);
+assert(Boolean(summary2026.delayReason?.includes('Forged Body Billet')), `2026 delay reason preserves specific root cause (got ${summary2026.delayReason})`);
+
+// Cumulative multi-year rollup
+const totalBookedAll = allMockCompleted.reduce((sum, p) => sum + (p.bookedAmount || 0), 0);
+assert(totalBookedAll === 620000, `Multi-year total revenue calculated as $620,000 (got ${totalBookedAll})`);
+const onTimeAll = allMockCompleted.filter(p => getPOManufacturingStatus(p).delayDays <= 0).length;
+const cumulativeOTIF = Math.round((onTimeAll / allMockCompleted.length) * 100);
+assert(cumulativeOTIF === 50, `Cumulative OTIF rate accurately calculates 50% (got ${cumulativeOTIF}%)`);
 
 console.log('\n================================================================');
 const successRate = totalTests === 0 ? 0 : Math.round((passedTests / totalTests) * 100);

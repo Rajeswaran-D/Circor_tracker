@@ -33,7 +33,7 @@ interface MilestoneModuleViewProps {
 }
 
 const ALL_14_STAGES = [
-  { key: 'po_from_customer', label: '1. PO Intake' },
+  { key: 'po_from_customer', label: '1. Customer PO' },
   { key: 'pm_baseline', label: '2. PM Baseline' },
   { key: 'corb_release', label: '3. CORB Release' },
   { key: 'bom_release', label: '4. BOM Release' },
