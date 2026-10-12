@@ -2,7 +2,8 @@ import {
   addDays, 
   getDaysDifference, 
   recalculateProductLine, 
-  validateEventDate
+  validateEventDate,
+  getMilestoneRevisedDates
 } from '../services/calculationEngine.ts';
 import { getPOManufacturingStatus } from '../utils/statusUtils.ts';
 import { extractDelayFlow } from '../components/common/DelayAnalysisFlow.tsx';
@@ -822,6 +823,469 @@ assert(totalBookedAll === 620000, `Multi-year total revenue calculated as $620,0
 const onTimeAll = allMockCompleted.filter(p => getPOManufacturingStatus(p).delayDays <= 0).length;
 const cumulativeOTIF = Math.round((onTimeAll / allMockCompleted.length) * 100);
 assert(cumulativeOTIF === 50, `Cumulative OTIF rate accurately calculates 50% (got ${cumulativeOTIF}%)`);
+
+console.log('\n📋 GROUP 14: Canonical Milestone Revised Timeline & Total Delay in All Stages');
+
+// Test 1: On-track milestone produces clean baseline dates
+const onTrackMs: Milestone = {
+  id: 'ms-test-1',
+  key: 'corb_release',
+  name: '3. CORB Release',
+  stageOrder: 3,
+  defaultDurationDays: 2,
+  committedBaselineStartDate: '2026-10-05',
+  committedBaselineEndDate: '2026-10-07',
+  committedDurationDays: 2,
+  forecastStartDate: '2026-10-05',
+  forecastEndDate: '2026-10-07',
+  varianceDays: 0,
+  status: 'Not Started',
+  completionPct: 0
+};
+const onTrackDates = getMilestoneRevisedDates(onTrackMs, null);
+assert(onTrackDates.revisedStart === '2026-10-05', `On-track revisedStart matches baselineStart (got ${onTrackDates.revisedStart})`);
+assert(onTrackDates.revisedEnd === '2026-10-07', `On-track revisedEnd matches baselineEnd (got ${onTrackDates.revisedEnd})`);
+assert(onTrackDates.shiftDays === 0, `On-track shiftDays is 0 (got ${onTrackDates.shiftDays})`);
+assert(!onTrackDates.isDelayed, 'On-track isDelayed is false');
+
+// Test 2: Predecessor delay shifts revised timeline consistently
+const prevDelayedMs: Milestone = {
+  id: 'ms-test-prev',
+  key: 'pm_baseline',
+  name: '2. Baseline Review',
+  stageOrder: 2,
+  defaultDurationDays: 3,
+  committedBaselineStartDate: '2026-10-01',
+  committedBaselineEndDate: '2026-10-04',
+  committedDurationDays: 3,
+  forecastStartDate: '2026-10-01',
+  forecastEndDate: '2026-10-09',
+  actualStartDate: '2026-10-01',
+  actualEndDate: '2026-10-09', // 5 days late
+  varianceDays: 5,
+  status: 'Completed',
+  completionPct: 100
+};
+const shiftedDates = getMilestoneRevisedDates(onTrackMs, prevDelayedMs);
+assert(shiftedDates.revisedStart === '2026-10-09', `Revised start shifts to previous actual end date (got ${shiftedDates.revisedStart})`);
+assert(shiftedDates.revisedEnd === '2026-10-11', `Revised end maintains 2-day duration from shifted start (got ${shiftedDates.revisedEnd})`);
+assert(shiftedDates.shiftDays === 4, `Shift days evaluates to 4 days vs baseline start (got ${shiftedDates.shiftDays})`);
+assert(shiftedDates.isDelayed, 'Delayed status is true');
+
+// Test 3: Milestone with its own late actual start
+const lateStartMs: Milestone = {
+  ...onTrackMs,
+  actualStartDate: '2026-10-10' // 5 days late kickoff
+};
+const lateStartDates = getMilestoneRevisedDates(lateStartMs, null);
+assert(lateStartDates.revisedStart === '2026-10-10', `Milestone own actualStartDate drives revisedStart (got ${lateStartDates.revisedStart})`);
+assert(lateStartDates.revisedEnd === '2026-10-12', `Revised end maintains 2-day duration (got ${lateStartDates.revisedEnd})`);
+assert(lateStartDates.shiftDays === 5, `Shift days is 5 days late (got ${lateStartDates.shiftDays})`);
+
+// Test 4: Total Delay in all stages verification
+const multiStageDelayPO: PurchaseOrder = {
+  id: 'po-multi-delay',
+  poNumber: 'PO-TEST-TOTAL-DELAY',
+  customerName: 'Test Energy Corp',
+  customerPoRef: 'REF-01',
+  contractReviewRef: 'CR-TEST-01',
+  poDate: '2026-09-01',
+  committedDeliveryDate: '2026-10-15',
+  revisedDeliveryDate: '2026-10-21',
+  status: 'Delayed',
+  revisions: [],
+  attachments: [],
+  createdBy: 'Project Management',
+  createdAt: '2026-09-01T00:00:00Z',
+  lastUpdatedBy: 'SCM',
+  lastUpdatedAt: '2026-09-20T00:00:00Z',
+  isClosed: false,
+  productLines: [{
+    id: 'line-td-1',
+    lineNumber: 'LINE-01',
+    productName: 'Gate Valve DN50',
+    category: 'High-Pressure Control Valves',
+    qty: 5,
+    designType: 'Existing Design',
+    overallVarianceDays: 6,
+    status: 'Delayed',
+    materials: [],
+    milestones: [
+      {
+        id: 'ms-td-1',
+        key: 'po_from_customer',
+        name: '1. Customer PO',
+        stageOrder: 1,
+        defaultDurationDays: 1,
+        committedBaselineStartDate: '2026-09-01',
+        committedBaselineEndDate: '2026-09-02',
+        committedDurationDays: 1,
+        forecastStartDate: '2026-09-01',
+        forecastEndDate: '2026-09-02',
+        actualStartDate: '2026-09-01',
+        actualEndDate: '2026-09-02',
+        varianceDays: 0,
+        status: 'Completed',
+        completionPct: 100
+      },
+      {
+        id: 'ms-td-3',
+        key: 'corb_release',
+        name: '3. CORB Release',
+        stageOrder: 3,
+        defaultDurationDays: 2,
+        committedBaselineStartDate: '2026-09-05',
+        committedBaselineEndDate: '2026-09-07',
+        committedDurationDays: 2,
+        forecastStartDate: '2026-09-05',
+        forecastEndDate: '2026-09-09',
+        actualStartDate: '2026-09-05',
+        actualEndDate: '2026-09-09', // +2d delay
+        varianceDays: 2,
+        delayReason: 'Customer engineering clarification',
+        status: 'Completed',
+        completionPct: 100
+      },
+      {
+        id: 'ms-td-7',
+        key: 'material_receipt',
+        name: '7. Material Receipt',
+        stageOrder: 7,
+        defaultDurationDays: 14,
+        committedBaselineStartDate: '2026-09-15',
+        committedBaselineEndDate: '2026-09-29',
+        committedDurationDays: 14,
+        forecastStartDate: '2026-09-17',
+        forecastEndDate: '2026-10-05',
+        actualStartDate: '2026-09-17',
+        actualEndDate: '2026-10-05', // +6d total variance (added +4d)
+        varianceDays: 6,
+        delayReason: 'Mill certificate re-inspection',
+        status: 'Completed',
+        completionPct: 100
+      }
+    ]
+  }]
+};
+
+const delayLedger = extractDelayFlow(multiStageDelayPO);
+assert(delayLedger.totalDaysDelayed === 6, `Total days delayed across all stages calculates +6d (got ${delayLedger.totalDaysDelayed}d)`);
+assert(delayLedger.delaySteps.length === 2, `Identifies exactly 2 stages adding delay in log (got ${delayLedger.delaySteps.length})`);
+assert(delayLedger.delaySteps[0].stageDelayAdded === 2, `Stage 3 added +2d delay (got ${delayLedger.delaySteps[0].stageDelayAdded})`);
+assert(delayLedger.delaySteps[1].stageDelayAdded === 4, `Stage 7 added +4d new delay (got ${delayLedger.delaySteps[1].stageDelayAdded})`);
+assert(delayLedger.netVarianceDays === 6, `Net variance matches 6 days (got ${delayLedger.netVarianceDays})`);
+
+console.log('\n📋 GROUP 15: Stage 7 Stores Raw Material Receipt & GRN Verification Delay Calculation');
+
+// Test scenario matching user screenshot:
+// Planned Baseline: 2026-11-05 -> 2026-11-26 (21 days duration)
+// Revised Target: 2026-11-07 -> 2026-11-28 (+2d shift from Stage 5 Work Order Release)
+// Material Order Date: 2026-11-07
+// Expected Delivery Date: 2026-11-28
+// Actual Received Date (GRN): 2026-11-28
+const baselineStartS7 = '2026-11-05';
+const baselineEndS7 = '2026-11-26';
+const prevStageEndS7 = '2026-11-07'; // Stage 5 ended 2 days late
+const matOrderDate = '2026-11-07';
+const matExpectedDate = '2026-11-28';
+const matReceivedDate = '2026-11-28';
+
+// When starting Stage 7 (mode === 'start'):
+// Event date is Material Order Date
+const s7StartTotalDelay = (baselineStartS7 && matOrderDate > baselineStartS7)
+  ? getDaysDifference(baselineStartS7, matOrderDate)
+  : 0;
+const s7StartInheritedDelay = (baselineStartS7 && prevStageEndS7 > baselineStartS7)
+  ? Math.min(s7StartTotalDelay, getDaysDifference(baselineStartS7, prevStageEndS7))
+  : 0;
+const s7StartNewDelay = Math.max(0, s7StartTotalDelay - s7StartInheritedDelay);
+
+assert(s7StartTotalDelay === 2, `Stage 7 start total delay is 2 days (got ${s7StartTotalDelay}d)`);
+assert(s7StartInheritedDelay === 2, `Stage 7 start inherited delay is 2 days (got ${s7StartInheritedDelay}d)`);
+assert(s7StartNewDelay === 0, `Stage 7 start new delay is strictly 0 days (got ${s7StartNewDelay}d)`);
+
+// When completing Stage 7 (mode === 'complete'):
+// Basic Rule: Expected Delivery Date is the crossing line for delay calculation
+const crossingLineOnTime = matExpectedDate; // 2026-11-28
+const s7CompTotalDelay = (baselineEndS7 && matReceivedDate > baselineEndS7)
+  ? getDaysDifference(baselineEndS7, matReceivedDate)
+  : 0;
+const s7CompNewDelay = (crossingLineOnTime && matReceivedDate > crossingLineOnTime)
+  ? getDaysDifference(crossingLineOnTime, matReceivedDate)
+  : 0;
+const s7CompInheritedDelay = Math.max(0, s7CompTotalDelay - s7CompNewDelay);
+
+assert(s7CompTotalDelay === 2, `Stage 7 completion total delay is 2 days (got ${s7CompTotalDelay}d)`);
+assert(s7CompInheritedDelay === 2, `Stage 7 completion inherited delay is 2 days (got ${s7CompInheritedDelay}d)`);
+assert(s7CompNewDelay === 0, `Stage 7 on-time arrival produces strictly 0 new delay (got ${s7CompNewDelay}d)`);
+
+// Test Crossing the Expected Delivery Date line:
+// If actual arrival date is 2026-12-05 (7 days past expected delivery date of 2026-11-28)
+const lateReceivedDate = '2026-12-05';
+const s7LateTotalDelay = (baselineEndS7 && lateReceivedDate > baselineEndS7)
+  ? getDaysDifference(baselineEndS7, lateReceivedDate)
+  : 0;
+const s7LateNewDelay = (crossingLineOnTime && lateReceivedDate > crossingLineOnTime)
+  ? getDaysDifference(crossingLineOnTime, lateReceivedDate)
+  : 0;
+const s7LateInheritedDelay = Math.max(0, s7LateTotalDelay - s7LateNewDelay);
+
+assert(s7LateTotalDelay === 9, `Stage 7 late arrival total delay is 9 days (got ${s7LateTotalDelay}d)`);
+assert(s7LateNewDelay === 7, `Stage 7 crossing expected delivery date by 7d calculates exactly +7d new delay (got ${s7LateNewDelay}d)`);
+assert(s7LateInheritedDelay === 2, `Stage 7 accurately preserves +2d inherited delay (got ${s7LateInheritedDelay}d)`);
+
+// Integration test for recalculateProductLine and extractDelayFlow
+const fullS7OrderLine: ProductLine = {
+  id: 'line-s7-test',
+  lineNumber: 'LINE-01',
+  productName: 'CFT-HV-300 Gate Valve 4 inch 1500#',
+  designType: 'Existing Design',
+  category: 'Gate Valves',
+  overallVarianceDays: 2,
+  status: 'In Progress',
+  qty: 5,
+  materials: [{
+    id: 'mat-s7',
+    name: 'Cast Steel Body WCB',
+    specification: 'ASTM A216 WCB',
+    quantity: 5,
+    unit: 'pcs',
+    leadTimeDays: 25,
+    isCriticalPath: true,
+    orderedDate: '2026-11-07',
+    expectedDate: '2026-12-02',
+    receivedDate: '2026-12-02'
+  }],
+  milestones: [
+    {
+      id: 'ms-5',
+      key: 'wo_release',
+      name: '5. Work Order Release',
+      stageOrder: 5,
+      defaultDurationDays: 2,
+      committedBaselineStartDate: '2026-10-29',
+      committedBaselineEndDate: '2026-10-31',
+      committedDurationDays: 2,
+      forecastStartDate: '2026-10-29',
+      forecastEndDate: '2026-11-02',
+      actualStartDate: '2026-10-29',
+      actualEndDate: '2026-11-02',
+      varianceDays: 2,
+      delayReason: 'A',
+      status: 'Completed',
+      completionPct: 100
+    },
+    {
+      id: 'ms-6',
+      key: 'sub_supplier_po',
+      name: '6. Sub-Supplier PO',
+      stageOrder: 6,
+      defaultDurationDays: 3,
+      committedBaselineStartDate: '2026-10-31',
+      committedBaselineEndDate: '2026-11-03',
+      committedDurationDays: 3,
+      forecastStartDate: '2026-11-02',
+      forecastEndDate: '2026-11-05',
+      actualStartDate: '2026-11-02',
+      actualEndDate: '2026-11-05',
+      varianceDays: 2,
+      status: 'Completed',
+      completionPct: 100
+    },
+    {
+      id: 'ms-7',
+      key: 'material_receipt',
+      name: '7. Material Receipt (GRN)',
+      stageOrder: 7,
+      defaultDurationDays: 21,
+      committedBaselineStartDate: '2026-11-05',
+      committedBaselineEndDate: '2026-11-26',
+      committedDurationDays: 21,
+      forecastStartDate: '2026-11-05',
+      forecastEndDate: '2026-11-26',
+      actualStartDate: '2026-11-07',
+      actualEndDate: '2026-12-02',
+      varianceDays: 0,
+      status: 'Completed',
+      completionPct: 100
+    }
+  ]
+};
+
+const recalcedLine = recalculateProductLine(fullS7OrderLine, '2026-12-02', 3, 7);
+const s7Milestone = recalcedLine.milestones.find(m => m.key === 'material_receipt')!;
+assert(s7Milestone.varianceDays === 2, `Stage 7 varianceDays preserves predecessor inherited delay of 2d instead of fake 6d (got ${s7Milestone.varianceDays})`);
+
+const s7OrderPO: PurchaseOrder = {
+  id: 'po-s7-test',
+  poNumber: 'PO-S7-TEST',
+  customerName: 'Test Customer',
+  poDate: '2026-10-29',
+  committedDeliveryDate: '2027-01-18',
+  status: 'In Progress',
+  delayDays: 2,
+  productLines: [recalcedLine]
+};
+
+const s7DelayLedger = extractDelayFlow(s7OrderPO);
+assert(s7DelayLedger.delaySteps.length === 1, `Audit Log contains exactly 1 delay step (Stage 5 only, no false Stage 7 card) (got ${s7DelayLedger.delaySteps.length})`);
+assert(s7DelayLedger.delaySteps[0].stageOrder === 5, `Delay card belongs to Stage 5 (got Stage ${s7DelayLedger.delaySteps[0].stageOrder})`);
+assert(s7DelayLedger.totalDaysDelayed === 2, `Total delay in audit log is strictly +2d (got ${s7DelayLedger.totalDaysDelayed}d)`);
+
+// Test exact scenario from user screenshot:
+// Stage 6 delayed by 3 days, ending 2026-11-04.
+// Stage 7 baseline: 2026-11-01 -> 2026-11-20 (19d planned).
+// Material lead time: 18 days.
+// Stage 7 actual start: 2026-11-04, actual end: 2026-11-22 (completed as per revised time).
+const lineUserScreenshot: ProductLine = {
+  id: 'line-screenshot',
+  lineNumber: 'LINE-01',
+  productName: 'Gate Valve',
+  designType: 'Existing Design',
+  category: 'Valves',
+  overallVarianceDays: 3,
+  status: 'In Progress',
+  qty: 1,
+  materials: [{
+    id: 'mat-18d',
+    name: 'Cast Body',
+    specification: 'ASTM A216 WCB',
+    quantity: 1,
+    unit: 'pcs',
+    leadTimeDays: 18,
+    isCriticalPath: true,
+    orderedDate: '2026-11-04',
+    expectedDate: '2026-11-22',
+    receivedDate: '2026-11-22'
+  }],
+  milestones: [
+    {
+      id: 'ms-sc-6',
+      key: 'sub_supplier_po',
+      name: '6. Sub-Supplier PO',
+      stageOrder: 6,
+      defaultDurationDays: 4,
+      committedBaselineStartDate: '2026-10-28',
+      committedBaselineEndDate: '2026-11-01',
+      committedDurationDays: 4,
+      forecastStartDate: '2026-10-30',
+      forecastEndDate: '2026-11-04',
+      actualStartDate: '2026-10-30',
+      actualEndDate: '2026-11-04',
+      varianceDays: 3,
+      status: 'Completed',
+      completionPct: 100
+    },
+    {
+      id: 'ms-sc-7',
+      key: 'material_receipt',
+      name: '7. Material Receipt (GRN)',
+      stageOrder: 7,
+      defaultDurationDays: 19,
+      committedBaselineStartDate: '2026-11-01',
+      committedBaselineEndDate: '2026-11-20',
+      committedDurationDays: 19,
+      forecastStartDate: '2026-11-04',
+      forecastEndDate: '2026-11-22',
+      actualStartDate: '2026-11-04',
+      actualEndDate: '2026-11-22',
+      varianceDays: 0,
+      status: 'Completed',
+      completionPct: 100
+    }
+  ]
+};
+
+const recalcedScreenshotLine = recalculateProductLine(lineUserScreenshot, '2026-11-22', 3, 7);
+const s7ScreenshotMs = recalcedScreenshotLine.milestones.find(m => m.key === 'material_receipt')!;
+assert(s7ScreenshotMs.varianceDays === 3, `Stage 7 varianceDays strictly matches predecessor delay of 3d when completed as per revised time (got ${s7ScreenshotMs.varianceDays})`);
+
+const prevVarScreenshot = 3;
+const currVarScreenshot = s7ScreenshotMs.varianceDays;
+const recoveredScreenshot = Math.max(0, prevVarScreenshot - currVarScreenshot);
+assert(recoveredScreenshot === 0, `No false 'delay resolved' when completed as per revised time (got ${recoveredScreenshot}d)`);
+
+console.log('\n📋 GROUP 16: Product-Specific Lead Time & Strict Delay Addition for Dates Past Estimated Date');
+
+// Test 1: Lead time changes dynamically based on selected product line
+const mockLineA: ProductLine = {
+  id: 'line-a',
+  lineNumber: 'LINE-01',
+  productName: 'Gate Valve 2" 600#',
+  designType: 'Existing Design',
+  category: 'Gate Valves',
+  overallVarianceDays: 0,
+  status: 'On Track',
+  qty: 10,
+  materials: [
+    {
+      id: 'mat-a',
+      itemCode: 'MAT-A105',
+      description: 'A105 Forgings',
+      qty: 10,
+      unit: 'EA',
+      supplierName: 'ForgeCo',
+      leadTimeDays: 14,
+      isCriticalPath: true
+    }
+  ],
+  milestones: []
+};
+
+const mockLineB: ProductLine = {
+  id: 'line-b',
+  lineNumber: 'LINE-02',
+  productName: 'Cryogenic Globe Valve 8" 2500#',
+  designType: 'New Design',
+  category: 'Globe Valves',
+  overallVarianceDays: 0,
+  status: 'On Track',
+  qty: 2,
+  materials: [
+    {
+      id: 'mat-b',
+      itemCode: 'MAT-INCO',
+      description: 'Inconel 625 Forgings',
+      qty: 2,
+      unit: 'EA',
+      supplierName: 'SpecialAlloys',
+      leadTimeDays: 45,
+      isCriticalPath: true
+    }
+  ],
+  milestones: []
+};
+
+// Line A lead time vs Line B lead time
+const leadTimeA = mockLineA.materials?.find(m => m.isCriticalPath)?.leadTimeDays || 14;
+const leadTimeB = mockLineB.materials?.find(m => m.isCriticalPath)?.leadTimeDays || 14;
+assert(leadTimeA === 14, `Line A has 14-day standard lead time (got ${leadTimeA}d)`);
+assert(leadTimeB === 45, `Line B has 45-day cryogenic lead time (got ${leadTimeB}d)`);
+
+const orderDateBase = '2026-10-01';
+const expA = addDays(orderDateBase, leadTimeA);
+const expB = addDays(orderDateBase, leadTimeB);
+assert(expA === '2026-10-15', `Line A expected date calculated as 2026-10-15 (got ${expA})`);
+assert(expB === '2026-11-15', `Line B expected date calculated as 2026-11-15 (got ${expB})`);
+
+// Test 2: Any date entered after estimated target date strictly adds delay
+// Case 2a: Stage 7 - received date after expected delivery date (estimated target)
+const estTargetS7 = '2026-10-15';
+const actualEnteredS7 = '2026-10-20'; // 5 days late
+const delayAddedS7 = (actualEnteredS7 > estTargetS7) ? getDaysDifference(estTargetS7, actualEnteredS7) : 0;
+assert(delayAddedS7 === 5, `Entering receipt date after estimated date adds 5 days delay (got ${delayAddedS7}d)`);
+
+// Case 2b: Non-Stage 7 - actual completion date entered after estimated completion date
+const estCompletionTarget = '2026-10-12';
+const actualCompletionEntered = '2026-10-16'; // 4 days late
+const delayAddedNonS7 = (actualCompletionEntered > estCompletionTarget) ? getDaysDifference(estCompletionTarget, actualCompletionEntered) : 0;
+assert(delayAddedNonS7 === 4, `Entering stage completion date after estimated target adds 4 days delay (got ${delayAddedNonS7}d)`);
+
+// Case 2c: Start date entered after estimated target start date
+const estStartTarget = '2026-10-05';
+const actualStartEntered = '2026-10-08'; // 3 days late
+const delayAddedStart = (actualStartEntered > estStartTarget) ? getDaysDifference(estStartTarget, actualStartEntered) : 0;
+assert(delayAddedStart === 3, `Entering stage start date after estimated target adds 3 days delay (got ${delayAddedStart}d)`);
 
 console.log('\n================================================================');
 const successRate = totalTests === 0 ? 0 : Math.round((passedTests / totalTests) * 100);

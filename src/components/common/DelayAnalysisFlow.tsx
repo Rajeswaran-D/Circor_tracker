@@ -60,9 +60,18 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
     const ms = milestones[i];
     const prevMs = i > 0 ? milestones[i - 1] : null;
 
+    const isMaterialStage = ms.key === 'material_receipt' || ms.key === 'raw_material';
+    const criticalMat = isMaterialStage
+      ? (line.materials?.find(m => m.isCriticalPath) || line.materials?.[0])
+      : undefined;
+
     const plannedStart = ms.committedBaselineStartDate || po.poDate;
-    const plannedEnd = ms.committedBaselineEndDate || po.committedDeliveryDate;
-    const plannedDuration = ms.committedDurationDays || 1;
+    const plannedEnd = (isMaterialStage && criticalMat?.expectedDate)
+      ? criticalMat.expectedDate
+      : (ms.committedBaselineEndDate || po.committedDeliveryDate);
+    const plannedDuration = (isMaterialStage && criticalMat?.leadTimeDays)
+      ? criticalMat.leadTimeDays
+      : (ms.committedDurationDays || 1);
 
     const actualStart = ms.actualStartDate || ms.forecastStartDate;
     const actualEnd = ms.actualEndDate || ms.forecastEndDate;
@@ -136,46 +145,7 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
       delaySteps.push(step);
       recoverySteps.push(step);
     } 
-    // 3. Stage finished late historically beyond planned target date or has active positive variance
-    else if (
-      (actualEnd && plannedEnd && actualEnd > plannedEnd) ||
-      (activeVariance > 0 && Boolean(ms.delayReason) && !ms.delayReason?.startsWith('Cascaded') && !ms.delayReason?.startsWith('Inherited'))
-    ) {
-      if (!delaySteps.some(s => s.stageKey === ms.key)) {
-        const historicalDelay = (actualEnd && plannedEnd && actualEnd > plannedEnd)
-          ? getDaysDifference(plannedEnd, actualEnd)
-          : activeVariance;
 
-        if (historicalDelay > 0) {
-          const step: DelayStep = {
-            stageOrder: ms.stageOrder,
-            stageName: ms.name,
-            stageKey: ms.key,
-            varianceDays: activeVariance,
-            delayDays: historicalDelay,
-            stageDelayAdded: historicalDelay,
-            cumulativeDelay: activeVariance,
-            stageDelta: historicalDelay,
-            isRootCause: false,
-            isRecovery: false,
-            isAdditionalDelay: true,
-            delayCategory: ms.delayCategory,
-            delayReason: (ms.delayReason && ms.delayReason.trim()) ? ms.delayReason.trim() : ms.name,
-            plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
-            actualDates: { start: actualStart, end: actualEnd, duration: actualDuration },
-            productLineName: line.productName,
-            lineNumber: line.lineNumber,
-            productLineId: line.id,
-            affectedProducts: [{ lineId: line.id, lineNumber: line.lineNumber, productName: line.productName, varianceDays: activeVariance, delayReason: (ms.delayReason && ms.delayReason.trim()) ? ms.delayReason.trim() : ms.name }]
-          };
-
-          delaySteps.push(step);
-          if (totalDaysDelayed === 0) {
-            totalDaysDelayed += historicalDelay;
-          }
-        }
-      }
-    }
   }
 
   // Prioritize the true delay origin:
@@ -580,6 +550,106 @@ export const DelayAnalysisFlow: React.FC<DelayAnalysisFlowProps> = ({
                 </div>
               );
             })}
+          </div>
+
+          {/* 3. TOTAL DELAY IN ALL STAGES SUMMARY IN LOG */}
+          <div className="mt-4 p-4 rounded-xl border border-slate-300 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white shadow-sm space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-700/80 pb-2.5">
+              <div className="flex items-center gap-2">
+                <div className={`w-6 h-6 rounded-md flex items-center justify-center font-bold text-xs ${
+                  isResolvedState ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'
+                }`}>
+                  Σ
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-white tracking-wide uppercase font-mono">
+                    Total Delay in All Stages
+                  </h4>
+                  <p className="text-[10px] text-slate-300">
+                    Comprehensive ledger of cumulative delays and recoveries across all 14 manufacturing stages
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={`px-2.5 py-1 rounded-md text-[11px] font-mono font-bold ${
+                  isResolvedState 
+                    ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-400/40' 
+                    : 'bg-rose-500/25 text-rose-300 border border-rose-400/40'
+                }`}>
+                  {isResolvedState ? '0 Days Net Delay' : `+${effectiveDelayDays} Days Net Overrun`}
+                </span>
+              </div>
+            </div>
+
+            {/* Metrics Breakdown Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs font-mono">
+              <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                <div className="text-[10px] text-slate-400 uppercase">Gross Delay Formed</div>
+                <div className="text-sm font-extrabold text-rose-400 mt-0.5">+{totalDaysDelayed}d</div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Across {delaySteps.filter(s => !s.isRecovery).length} stage(s)</div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                <div className="text-[10px] text-slate-400 uppercase">Delays Recovered</div>
+                <div className="text-sm font-extrabold text-emerald-400 mt-0.5">
+                  {totalDaysRecovered > 0 ? `-${totalDaysRecovered}d` : '0d'}
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Across {delaySteps.filter(s => s.isRecovery).length} stage(s)</div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                <div className="text-[10px] text-slate-400 uppercase">Net Schedule Impact</div>
+                <div className={`text-sm font-extrabold mt-0.5 ${isResolvedState ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {isResolvedState ? '0d (On Time)' : `+${effectiveDelayDays}d`}
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Contract delivery shift</div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                <div className="text-[10px] text-slate-400 uppercase">Revised Delivery Target</div>
+                <div className="text-xs font-extrabold text-cyan-300 mt-0.5 truncate" title={po.revisedDeliveryDate || po.committedDeliveryDate}>
+                  {po.revisedDeliveryDate || po.committedDeliveryDate}
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Baseline: {po.committedDeliveryDate}</div>
+              </div>
+            </div>
+
+            {/* Stage-by-Stage Cumulative Delay Ledger */}
+            {delaySteps.length > 0 && (
+              <div className="pt-2 border-t border-slate-700/60">
+                <div className="text-[10px] font-mono uppercase text-slate-300 font-bold mb-1.5 flex items-center justify-between">
+                  <span>Stage-by-Stage Delay Log Contributions:</span>
+                  <span className="text-slate-400">Total Delayed Stages: {delaySteps.length}</span>
+                </div>
+                <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                  {delaySteps.map((step, idx) => (
+                    <div key={idx} className="flex items-center justify-between p-1.5 rounded bg-white/5 text-[11px] font-mono border border-white/5">
+                      <div className="flex items-center gap-2 truncate pr-2">
+                        <span className="text-slate-400">#{step.stageOrder}</span>
+                        <span className="text-slate-200 truncate">{step.stageName.replace(/^\d+\.\s*/, '')}</span>
+                        {step.productLineName && (
+                          <span className="text-[9px] text-slate-400 hidden sm:inline">
+                            ({step.lineNumber ? `${step.lineNumber} ` : ''}{step.productLineName})
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className={`px-1.5 py-0.2 rounded font-bold ${
+                          step.isRecovery
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                        }`}>
+                          {step.isRecovery ? `${step.stageDelayAdded}d` : `+${step.stageDelayAdded}d`}
+                        </span>
+                        <span className="text-slate-400 text-[10px]">
+                          Running: <strong className="text-white">+{step.cumulativeDelay}d</strong>
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

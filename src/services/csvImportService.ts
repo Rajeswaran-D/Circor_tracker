@@ -890,8 +890,12 @@ export function parseAndValidateCsv(
             : (runningChainDate <= actualEnd ? runningChainDate : actualEnd);
           runningChainDate = actualEnd;
 
-          if (m.committedBaselineEndDate && actualEnd > m.committedBaselineEndDate) {
-            const diff = getDaysDifference(m.committedBaselineEndDate, actualEnd);
+          const stageCrossingLine = (m.key === 'material_receipt' && effectiveMatExpectedDate)
+            ? effectiveMatExpectedDate
+            : m.committedBaselineEndDate;
+
+          if (stageCrossingLine && actualEnd > stageCrossingLine) {
+            const diff = getDaysDifference(stageCrossingLine, actualEnd);
             if (diff > 0) {
               delayReason = (rawLine.remarks && rawLine.remarks.trim()) ? rawLine.remarks.trim() : m.name;
               delayCategory = (m.key === 'sub_supplier_po' || m.key === 'material_receipt')

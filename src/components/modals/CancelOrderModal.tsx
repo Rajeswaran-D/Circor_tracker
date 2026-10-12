@@ -140,10 +140,10 @@ export const CancelOrderModal: React.FC<CancelOrderModalProps> = ({ isOpen, onCl
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-      <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden text-slate-800 animate-in fade-in zoom-in-95 duration-150">
+      <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden text-slate-800 animate-in fade-in zoom-in-95 duration-150">
         
         {/* Header */}
-        <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-6 py-4 text-white flex items-center justify-between">
+        <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-6 py-4 text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className={`p-2 rounded-xl ${isAdmin ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'}`}>
               {isAdmin ? <Trash2 className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
@@ -164,7 +164,7 @@ export const CancelOrderModal: React.FC<CancelOrderModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Content Body */}
-        <div className="p-6 space-y-5 text-xs">
+        <div className="p-6 space-y-5 text-xs flex-1 overflow-y-auto min-h-0">
           
           {errorMessage && (
             <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl flex items-start gap-2.5">

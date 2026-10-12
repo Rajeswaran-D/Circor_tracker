@@ -118,18 +118,20 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
       const prev = i > 0 ? mList[i - 1] : null;
       const currVar = Math.max(
         0,
-        typeof ms.varianceDays === 'number' ? ms.varianceDays : 0,
-        (ms.actualEndDate && ms.committedBaselineEndDate && ms.actualEndDate > ms.committedBaselineEndDate)
-          ? getDaysDifference(ms.committedBaselineEndDate, ms.actualEndDate)
-          : 0
+        typeof ms.varianceDays === 'number'
+          ? ms.varianceDays
+          : (ms.actualEndDate && ms.committedBaselineEndDate && ms.actualEndDate > ms.committedBaselineEndDate)
+            ? getDaysDifference(ms.committedBaselineEndDate, ms.actualEndDate)
+            : 0
       );
       const prevVar = prev
         ? Math.max(
             0,
-            typeof prev.varianceDays === 'number' ? prev.varianceDays : 0,
-            (prev.actualEndDate && prev.committedBaselineEndDate && prev.actualEndDate > prev.committedBaselineEndDate)
-              ? getDaysDifference(prev.committedBaselineEndDate, prev.actualEndDate)
-              : 0
+            typeof prev.varianceDays === 'number'
+              ? prev.varianceDays
+              : (prev.actualEndDate && prev.committedBaselineEndDate && prev.actualEndDate > prev.committedBaselineEndDate)
+                ? getDaysDifference(prev.committedBaselineEndDate, prev.actualEndDate)
+                : 0
           )
         : 0;
       const delta = currVar - prevVar;

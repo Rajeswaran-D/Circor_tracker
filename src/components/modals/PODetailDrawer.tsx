@@ -17,7 +17,7 @@ import {
   LayoutGrid
 } from 'lucide-react';
 import { getPOManufacturingStatus, getStageFriendlyName } from '../../utils/statusUtils';
-import { getDaysDifference, addDays } from '../../services/calculationEngine';
+import { getMilestoneRevisedDates } from '../../services/calculationEngine';
 import { BaselineRevisionModal } from './BaselineRevisionModal';
 import { OrderProgressOverview } from '../common/OrderProgressOverview';
 import { DelayAnalysisFlow } from '../common/DelayAnalysisFlow';
@@ -624,18 +624,15 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                       const isCurrent = !isPendingBaseline && index === activeStageIdx;
                       const friendlyName = getStageFriendlyName(ms.key, selectedLine);
 
-                      const bStart = ms.committedBaselineStartDate || po.poDate;
-                      const bEnd = ms.committedBaselineEndDate || po.committedDeliveryDate;
-                      const dur = Math.max(1, ms.committedDurationDays || 1);
-                      const baselineDuration = (bStart && bEnd) ? Math.max(1, getDaysDifference(bStart, bEnd)) : dur;
-
-                      const prevActualEnd = prevMs?.actualEndDate;
-                      const prevEffectiveEnd = prevActualEnd || prevMs?.forecastEndDate;
-                      const hasPrevDelayShift = Boolean(bStart && prevEffectiveEnd && prevEffectiveEnd > bStart);
-                      const shiftDays = (hasPrevDelayShift && bStart && prevEffectiveEnd) ? getDaysDifference(bStart, prevEffectiveEnd) : 0;
-
-                      const revisedStart = ms.actualStartDate || (hasPrevDelayShift ? prevEffectiveEnd : (bStart || ''));
-                      const revisedEnd = ms.actualEndDate || (shiftDays > 0 && revisedStart ? addDays(revisedStart, baselineDuration) : (bEnd || ''));
+                      const prevEffectiveEnd = prevMs?.actualEndDate || prevMs?.forecastEndDate;
+                      const {
+                        revisedStart,
+                        revisedEnd,
+                        shiftDays,
+                        baselineStart: bStart,
+                        baselineEnd: bEnd,
+                        baselineDuration
+                      } = getMilestoneRevisedDates(ms, prevMs, po.poDate, po.committedDeliveryDate);
 
                       const delayedLineWithReason = productLineMilestones.find(p => p.delayReason && !p.delayReason.startsWith('Cascaded delay') && !p.delayReason.startsWith('Inherited delay'));
                       const stageDelayReason = delayedLineWithReason?.delayReason || (ms.delayReason && !ms.delayReason.startsWith('Cascaded delay') && !ms.delayReason.startsWith('Inherited delay') ? ms.delayReason : undefined);

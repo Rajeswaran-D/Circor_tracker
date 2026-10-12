@@ -857,36 +857,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const baselineStart = ms.committedBaselineStartDate;
       const baselineEnd = ms.committedBaselineEndDate;
 
+      const isMaterialStage = ms.key === 'material_receipt';
+      const criticalMat = line.materials?.find(m => m.isCriticalPath) || line.materials?.[0];
+      const matLeadTime = (criticalMat && typeof criticalMat.leadTimeDays === 'number' && criticalMat.leadTimeDays > 0)
+        ? criticalMat.leadTimeDays
+        : (ms.committedDurationDays || duration);
+
       let isNewDelayCausedByStage = false;
       let newDelayDays = 0;
       let revisedTargetLimit = '';
 
-      if (item.eventType === 'start') {
+      if (isMaterialStage) {
+        const targetStart = (baselineStart && prevActualEnd && prevActualEnd > baselineStart) ? prevActualEnd : (baselineStart || '');
+        const targetDelivery = targetStart ? addDays(targetStart, matLeadTime) : (ms.forecastEndDate || baselineEnd || '');
+        const crossingLine = item.expectedDate || targetDelivery || baselineEnd || '';
+
+        if (item.eventType === 'start') {
+          const effectiveOrder = item.orderedDate || item.eventDate;
+          newDelayDays = (targetStart && effectiveOrder && effectiveOrder > targetStart)
+            ? getDaysDifference(targetStart, effectiveOrder)
+            : 0;
+          isNewDelayCausedByStage = newDelayDays > 0;
+          revisedTargetLimit = targetStart;
+        } else {
+          // Rule: Expected delivery date is the crossing line for Stage 7 delay calculation
+          const effectiveReceipt = item.receivedDate || item.eventDate;
+          newDelayDays = (crossingLine && effectiveReceipt && effectiveReceipt > crossingLine)
+            ? getDaysDifference(crossingLine, effectiveReceipt)
+            : 0;
+          isNewDelayCausedByStage = newDelayDays > 0;
+          revisedTargetLimit = crossingLine;
+        }
+      } else if (item.eventType === 'start') {
+        const targetStart = (baselineStart && prevActualEnd && prevActualEnd > baselineStart)
+          ? prevActualEnd
+          : (baselineStart || '');
         const totalDelay = (baselineStart && item.eventDate > baselineStart)
           ? getDaysDifference(baselineStart, item.eventDate)
           : 0;
         const inheritedDelay = (baselineStart && prevActualEnd && prevActualEnd > baselineStart)
           ? Math.min(totalDelay, getDaysDifference(baselineStart, prevActualEnd))
           : 0;
-        newDelayDays = Math.max(0, totalDelay - inheritedDelay);
+        newDelayDays = (targetStart && item.eventDate > targetStart)
+          ? getDaysDifference(targetStart, item.eventDate)
+          : Math.max(0, totalDelay - inheritedDelay);
         isNewDelayCausedByStage = newDelayDays > 0;
-        revisedTargetLimit = (baselineStart && prevActualEnd && prevActualEnd > baselineStart)
-          ? prevActualEnd
-          : (baselineStart || '');
+        revisedTargetLimit = targetStart;
       } else {
-        const totalDelay = (baselineEnd && item.eventDate > baselineEnd)
-          ? getDaysDifference(baselineEnd, item.eventDate)
-          : 0;
         const effectiveStart = ms.actualStartDate || ((baselineStart && prevActualEnd && prevActualEnd > baselineStart) ? prevActualEnd : baselineStart);
-        const startDelay = (baselineStart && effectiveStart && effectiveStart > baselineStart)
-          ? getDaysDifference(baselineStart, effectiveStart)
-          : 0;
-        const inheritedDelay = Math.min(totalDelay, startDelay);
-        newDelayDays = Math.max(0, totalDelay - inheritedDelay);
-        isNewDelayCausedByStage = newDelayDays > 0;
-
         const baselineDuration = (baselineStart && baselineEnd) ? Math.max(1, getDaysDifference(baselineStart, baselineEnd)) : duration;
-        revisedTargetLimit = startDelay > 0 && effectiveStart ? addDays(effectiveStart, baselineDuration) : (baselineEnd || '');
+        const targetEnd = ms.forecastEndDate || (effectiveStart ? addDays(effectiveStart, baselineDuration) : baselineEnd);
+        newDelayDays = (targetEnd && item.eventDate > targetEnd)
+          ? getDaysDifference(targetEnd, item.eventDate)
+          : 0;
+        isNewDelayCausedByStage = newDelayDays > 0;
+        revisedTargetLimit = targetEnd || baselineEnd || '';
       }
 
       if (isNewDelayCausedByStage && !item.delayReason?.trim()) {
@@ -1537,8 +1562,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             const pmIdx = updatedMsList.findIndex(m => m.key === 'pm_baseline' || m.key === 'baseline_review');
             if (pmIdx >= 0) {
-              const pmStart = updatedMsList[pmIdx].actualStartDate || todayStr;
-              const pmEnd = todayStr;
+              const pmStart = updatedMsList[pmIdx].actualStartDate || updatedMsList[pmIdx].committedBaselineStartDate || todayStr;
+              const pmEnd = isInitialApproval
+                ? (updatedMsList[pmIdx].committedBaselineEndDate || todayStr)
+                : (todayStr > updatedMsList[pmIdx].committedBaselineEndDate ? todayStr : updatedMsList[pmIdx].committedBaselineEndDate);
               updatedMsList[pmIdx] = {
                 ...updatedMsList[pmIdx],
                 actualStartDate: pmStart,
@@ -1612,8 +1639,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           const pmIdx = updatedMsList.findIndex(m => m.key === 'pm_baseline' || m.key === 'baseline_review');
           if (pmIdx >= 0) {
-            const pmStart = updatedMsList[pmIdx].actualStartDate || todayStr;
-            const pmEnd = todayStr;
+            const pmStart = updatedMsList[pmIdx].actualStartDate || updatedMsList[pmIdx].committedBaselineStartDate || todayStr;
+            const pmEnd = isInitialApproval
+              ? (updatedMsList[pmIdx].committedBaselineEndDate || todayStr)
+              : (todayStr > updatedMsList[pmIdx].committedBaselineEndDate ? todayStr : updatedMsList[pmIdx].committedBaselineEndDate);
             updatedMsList[pmIdx] = {
               ...updatedMsList[pmIdx],
               actualStartDate: pmStart,
@@ -1647,11 +1676,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .sort()
         .slice(-1)[0];
 
+      const maxFinalForecast = updatedLines
+        .map(line => line.milestones[line.milestones.length - 1]?.forecastEndDate)
+        .filter((date): date is string => Boolean(date))
+        .sort()
+        .slice(-1)[0];
+
+      const finalBaselineDelivery = recalculatedDeliveryDate || p.committedDeliveryDate;
+      const finalRevisedDelivery = (maxFinalForecast && maxFinalForecast > finalBaselineDelivery)
+        ? maxFinalForecast
+        : finalBaselineDelivery;
+
       return {
         ...p,
         status: p.status === 'Baseline Pending' ? 'In Progress' : getPurchaseOrderStatus(updatedLines, p.isClosed),
-        committedDeliveryDate: recalculatedDeliveryDate || p.committedDeliveryDate,
-        revisedDeliveryDate: recalculatedDeliveryDate || p.revisedDeliveryDate,
+        committedDeliveryDate: finalBaselineDelivery,
+        revisedDeliveryDate: finalRevisedDelivery,
         revisions: [...p.revisions, newRev],
         productLines: updatedLines,
         lastUpdatedBy: user,

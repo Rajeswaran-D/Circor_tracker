@@ -415,20 +415,29 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                {po.productLines.map(line => (
-                  <div key={line.id} className="bg-white p-3 rounded-lg border border-slate-200 space-y-1 shadow-2xs">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-bold text-slate-900 truncate">{line.lineNumber}: {line.productName}</span>
-                      <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-purple-50 text-purple-800 border border-purple-200">
-                        {line.designType}
-                      </span>
+                {po.productLines.map(line => {
+                  let lineRunningDate = baselineStartDate || po.poDate || today;
+                  line.milestones.forEach(ms => {
+                    const dur = masterDurations[ms.key] !== undefined ? masterDurations[ms.key] : ms.committedDurationDays;
+                    lineRunningDate = addDays(lineRunningDate, Math.max(1, dur));
+                  });
+                  const lineDelivery = lineRunningDate || masterCalculatedDeliveryDate;
+
+                  return (
+                    <div key={line.id} className="bg-white p-3 rounded-lg border border-slate-200 space-y-1 shadow-2xs">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-slate-900 truncate">{line.lineNumber}: {line.productName}</span>
+                        <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-purple-50 text-purple-800 border border-purple-200">
+                          {line.designType}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 font-mono flex items-center justify-between pt-1">
+                        <span>Qty: <strong>{line.qty} Pcs</strong></span>
+                        <span className="text-emerald-800 font-bold">Delivery: {lineDelivery}</span>
+                      </div>
                     </div>
-                    <div className="text-[11px] text-slate-500 font-mono flex items-center justify-between pt-1">
-                      <span>Qty: <strong>{line.qty} Pcs</strong></span>
-                      <span className="text-emerald-800 font-bold">Delivery: {masterCalculatedDeliveryDate}</span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>

@@ -503,14 +503,14 @@ export function recalculateProductLine(
 
   let currentForecastStart = milestones[0].committedBaselineStartDate || todayStr;
 
-  // The longest outstanding or actual received material arrival drives material receipt.
-  let maxMaterialArrivalDate = currentForecastStart;
-  healedLine.materials.forEach(mat => {
+  // The longest outstanding or actual received material arrival drives material receipt end date.
+  let maxMaterialArrivalDate = '';
+  for (const mat of healedLine.materials) {
     const arrival = mat.receivedDate || (mat.expectedDate ? clampDateMin(mat.expectedDate, todayStr) : undefined);
     if (arrival && arrival > maxMaterialArrivalDate) {
       maxMaterialArrivalDate = arrival;
     }
-  });
+  }
 
   const updatedMilestones: Milestone[] = [];
 
@@ -526,12 +526,6 @@ export function recalculateProductLine(
       }
     }
 
-    if (ms.key === 'material_receipt' || ms.key === 'raw_material') {
-      if (maxMaterialArrivalDate > forecastStart) {
-        forecastStart = maxMaterialArrivalDate;
-      }
-    }
-
     if (ms.actualStartDate) {
       const prevEnd = msIndex > 0 ? milestoneEffectiveEnd(updatedMilestones[msIndex - 1]) : undefined;
       forecastStart = prevEnd && ms.actualStartDate < prevEnd ? prevEnd : ms.actualStartDate;
@@ -543,16 +537,67 @@ export function recalculateProductLine(
     const startDelay = (ms.committedBaselineStartDate && forecastStart > ms.committedBaselineStartDate)
       ? getDaysDifference(ms.committedBaselineStartDate, forecastStart)
       : 0;
-    const forecastEnd = ms.actualEndDate || (
+    let forecastEnd = ms.actualEndDate || (
       startDelay > 0 && ms.committedBaselineEndDate
         ? addDays(ms.committedBaselineEndDate, startDelay)
         : (ms.committedBaselineEndDate || addDays(forecastStart, duration))
     );
 
+    const isMaterialStage = ms.key === 'material_receipt' || ms.key === 'raw_material';
+    const criticalMat = isMaterialStage
+      ? (healedLine.materials?.find(m => m.isCriticalPath) || healedLine.materials?.[0])
+      : undefined;
+
+    if (isMaterialStage && !ms.actualEndDate) {
+      if (criticalMat?.expectedDate && criticalMat.expectedDate > forecastEnd) {
+        forecastEnd = criticalMat.expectedDate;
+      } else if (maxMaterialArrivalDate && maxMaterialArrivalDate > forecastEnd) {
+        forecastEnd = maxMaterialArrivalDate;
+      }
+    }
+
     const effEnd = ms.actualEndDate || forecastEnd;
-    const varianceDays = effEnd > ms.committedBaselineEndDate 
-      ? Math.max(1, getDaysDifference(ms.committedBaselineEndDate, effEnd))
-      : getDaysDifference(ms.committedBaselineEndDate, effEnd);
+    let varianceDays: number;
+
+    if (isMaterialStage) {
+      const matLeadTime = (criticalMat && typeof criticalMat.leadTimeDays === 'number' && criticalMat.leadTimeDays > 0)
+        ? criticalMat.leadTimeDays
+        : duration;
+      const targetOrderStart = (ms.committedBaselineStartDate && forecastStart > ms.committedBaselineStartDate)
+        ? forecastStart
+        : (ms.committedBaselineStartDate || forecastStart);
+      const targetDelivery = targetOrderStart ? addDays(targetOrderStart, matLeadTime) : forecastEnd;
+      const crossingLine = criticalMat?.expectedDate || targetDelivery || ms.committedBaselineEndDate;
+
+      const prevMs = msIndex > 0 ? updatedMilestones[msIndex - 1] : undefined;
+      const inheritedDelay = prevMs ? Math.max(0, typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0) : 0;
+
+      if (ms.actualEndDate) {
+        if (crossingLine && ms.actualEndDate > crossingLine) {
+          const newDelay = getDaysDifference(crossingLine, ms.actualEndDate);
+          varianceDays = inheritedDelay + newDelay;
+        } else if (crossingLine && ms.actualEndDate < crossingLine) {
+          const daysEarly = getDaysDifference(ms.actualEndDate, crossingLine);
+          varianceDays = inheritedDelay - daysEarly;
+        } else {
+          varianceDays = inheritedDelay;
+        }
+      } else {
+        if (forecastEnd && crossingLine && forecastEnd > crossingLine) {
+          const newDelay = getDaysDifference(crossingLine, forecastEnd);
+          varianceDays = inheritedDelay + newDelay;
+        } else if (forecastEnd && crossingLine && forecastEnd < crossingLine) {
+          const daysEarly = getDaysDifference(forecastEnd, crossingLine);
+          varianceDays = inheritedDelay - daysEarly;
+        } else {
+          varianceDays = inheritedDelay;
+        }
+      }
+    } else {
+      varianceDays = effEnd > ms.committedBaselineEndDate 
+        ? Math.max(1, getDaysDifference(ms.committedBaselineEndDate, effEnd))
+        : getDaysDifference(ms.committedBaselineEndDate, effEnd);
+    }
 
     let status: MilestoneStatus = ms.status;
     let delayCategory = varianceDays > 0 ? ms.delayCategory : undefined;
@@ -757,4 +802,94 @@ export function mergeDelayReason(existingReason: string = '', inheritedSummary: 
     return `${cleanExisting.join(' | ')} | ${inheritedSummary}`;
   }
   return inheritedSummary;
+}
+
+export interface MilestoneRevisedDates {
+  revisedStart: string;
+  revisedEnd: string;
+  shiftDays: number;
+  isDelayed: boolean;
+  baselineStart: string;
+  baselineEnd: string;
+  baselineDuration: number;
+}
+
+/**
+ * Single canonical source of truth for milestone revised target dates, timeline shift, and baseline comparisons.
+ * Ensures consistent calculation across all roles, modals, and views.
+ */
+export function getMilestoneRevisedDates(
+  ms: Milestone,
+  prevMilestone?: Milestone | null,
+  fallbackPoDate?: string,
+  fallbackPoDelivery?: string
+): MilestoneRevisedDates {
+  const baselineStart = ms.committedBaselineStartDate || fallbackPoDate || '';
+  const baselineEnd = ms.committedBaselineEndDate || fallbackPoDelivery || '';
+  const dur = Math.max(1, ms.committedDurationDays || 1);
+  const baselineDuration = (baselineStart && baselineEnd)
+    ? Math.max(1, getDaysDifference(baselineStart, baselineEnd))
+    : dur;
+
+  // Previous stage effective completion
+  const prevEffectiveEnd = prevMilestone?.actualEndDate || prevMilestone?.forecastEndDate;
+
+  // Revised Start:
+  // 1. If actualStartDate exists, use it.
+  // 2. Otherwise if previous stage ends after baselineStart, shift start to previous stage end.
+  // 3. Otherwise if forecastStartDate exists and is later than baselineStart, use forecastStartDate.
+  // 4. Otherwise use baselineStart.
+  let revisedStart = ms.actualStartDate || '';
+  if (!revisedStart) {
+    if (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart) {
+      revisedStart = prevEffectiveEnd;
+    } else if (ms.forecastStartDate && baselineStart && ms.forecastStartDate > baselineStart) {
+      revisedStart = ms.forecastStartDate;
+    } else {
+      revisedStart = baselineStart || ms.forecastStartDate || '';
+    }
+  }
+
+  // Calculate start shift against baseline start
+  const startShift = (baselineStart && revisedStart && revisedStart > baselineStart)
+    ? getDaysDifference(baselineStart, revisedStart)
+    : 0;
+
+  // Revised End:
+  // 1. If actualEndDate exists, use it.
+  // 2. Otherwise if forecastEndDate exists and is later than baselineEnd, use forecastEndDate.
+  // 3. Otherwise if start shifted, add baseline duration to revisedStart.
+  // 4. Otherwise use baselineEnd.
+  let revisedEnd = ms.actualEndDate || '';
+  if (!revisedEnd) {
+    if (ms.forecastEndDate && (!baselineEnd || ms.forecastEndDate > baselineEnd)) {
+      revisedEnd = ms.forecastEndDate;
+    } else if (startShift > 0 && revisedStart) {
+      revisedEnd = addDays(revisedStart, baselineDuration);
+    } else {
+      revisedEnd = baselineEnd || (revisedStart ? addDays(revisedStart, baselineDuration) : '');
+    }
+  }
+
+  // Ensure revisedEnd is never before revisedStart
+  if (revisedStart && revisedEnd && revisedEnd < revisedStart) {
+    revisedEnd = addDays(revisedStart, baselineDuration);
+  }
+
+  // Total shift days is either end variance or start shift
+  const endShift = (baselineEnd && revisedEnd && revisedEnd > baselineEnd)
+    ? getDaysDifference(baselineEnd, revisedEnd)
+    : 0;
+  const shiftDays = Math.max(startShift, endShift, typeof ms.varianceDays === 'number' && ms.varianceDays > 0 ? ms.varianceDays : 0);
+  const isDelayed = shiftDays > 0;
+
+  return {
+    revisedStart,
+    revisedEnd,
+    shiftDays,
+    isDelayed,
+    baselineStart,
+    baselineEnd,
+    baselineDuration
+  };
 }

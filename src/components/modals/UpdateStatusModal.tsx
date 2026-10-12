@@ -213,10 +213,10 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-      <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden text-slate-800 animate-in fade-in zoom-in-95 duration-150">
+      <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-lg max-h-[92vh] flex flex-col shadow-2xl overflow-hidden text-slate-800 animate-in fade-in zoom-in-95 duration-150">
         
         {/* Header */}
-        <div className="bg-slate-50 p-5 border-b border-slate-200 flex items-center justify-between">
+        <div className="bg-slate-50 p-5 border-b border-slate-200 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="p-2 bg-emerald-100 text-emerald-800 rounded-xl">
               <Wrench className="w-5 h-5" />
@@ -235,7 +235,8 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
         </div>
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-5 text-xs">
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto min-h-0 flex flex-col justify-between">
+          <div className="p-6 space-y-5 text-xs flex-1">
           
           {errorMsg && (
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 font-medium">
@@ -539,8 +540,10 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
             />
           </div>
 
+          </div>
+
           {/* Actions */}
-          <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+          <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3 shrink-0">
             <button
               type="button"
               onClick={onClose}

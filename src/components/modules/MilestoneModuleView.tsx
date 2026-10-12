@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import type { MilestoneStatus, DelayCategory, PurchaseOrder, ProductLine, Milestone } from '../../types';
 import { isMilestoneOwnedByRole } from '../../types';
-import { validateEventDate, getDaysDifference, mergeDelayReason, addDays } from '../../services/calculationEngine';
+import { validateEventDate, getDaysDifference, mergeDelayReason, addDays, getMilestoneRevisedDates } from '../../services/calculationEngine';
 import { 
   Calendar, 
   CheckCircle2, 
@@ -19,7 +19,8 @@ import {
   Eye,
   EyeOff,
   X,
-  Search
+  Search,
+  PackageCheck
 } from 'lucide-react';
 import { CloseOrderModal } from '../modals/CloseOrderModal';
 import { DelayAnalysisFlow } from '../common/DelayAnalysisFlow';
@@ -77,6 +78,10 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
   const [formData, setFormData] = useState<{
     startDate: string;
     endDate: string;
+    orderedDate?: string;
+    expectedDate?: string;
+    receivedDate?: string;
+    inspectionResult?: 'Passed' | 'Rejected' | 'Pending';
     docRef: string;
     particularDetails: string;
     secondaryRef: string;
@@ -87,6 +92,10 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
   }>({
     startDate: '',
     endDate: '',
+    orderedDate: '',
+    expectedDate: '',
+    receivedDate: '',
+    inspectionResult: 'Passed',
     docRef: '',
     particularDetails: '',
     secondaryRef: '',
@@ -103,6 +112,10 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
     mode: 'start' | 'complete';
     selectedLineIds: string[];
     date: string;
+    orderedDate?: string;
+    expectedDate?: string;
+    receivedDate?: string;
+    inspectionResult?: 'Passed' | 'Rejected' | 'Pending';
     docRef: string;
     delayCategory: DelayCategory | '';
     delayReason: string;
@@ -112,6 +125,10 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
     mode: 'start',
     selectedLineIds: [],
     date: new Date().toISOString().split('T')[0],
+    orderedDate: '',
+    expectedDate: '',
+    receivedDate: '',
+    inspectionResult: 'Passed',
     docRef: '',
     delayCategory: '',
     delayReason: ''
@@ -249,9 +266,22 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
     setEditingKey(entryKey);
     setErrorMessage(null);
     setSuccessMessage(null);
+
+    const targetLine = purchaseOrders.flatMap(p => p.productLines).find(l => l.milestones.some(m => m.id === milestone.id));
+    const criticalMat = targetLine?.materials?.find(m => m.isCriticalPath) || targetLine?.materials?.[0];
+    const defOrderDate = criticalMat?.orderedDate || milestone.actualStartDate || milestone.committedBaselineStartDate || todayStr;
+    const defLead = criticalMat?.leadTimeDays || 14;
+    const defExpectedDate = criticalMat?.expectedDate || milestone.committedBaselineEndDate || addDays(defOrderDate, defLead);
+    const defReceivedDate = criticalMat?.receivedDate || milestone.actualEndDate || todayStr;
+    const defInspection = criticalMat?.inspectionResult || 'Passed';
+
     setFormData({
       startDate: milestone.actualStartDate || milestone.forecastStartDate || milestone.committedBaselineStartDate || todayStr,
       endDate: milestone.actualEndDate || milestone.forecastEndDate || milestone.committedBaselineEndDate || todayStr,
+      orderedDate: defOrderDate,
+      expectedDate: defExpectedDate,
+      receivedDate: defReceivedDate,
+      inspectionResult: defInspection,
       docRef: milestone.docRef || '',
       particularDetails: (milestone as any).particularDetails || '',
       secondaryRef: (milestone as any).secondaryRef || '',
@@ -275,7 +305,9 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
     if (msIndex < 0) return;
 
     if (markComplete) {
-      const effectiveCompDate = formData.endDate || todayStr;
+      const effectiveCompDate = (stageKey === 'material_receipt' || key === 'material_receipt')
+        ? (formData.receivedDate || formData.endDate || todayStr)
+        : (formData.endDate || todayStr);
       const delayReasonToUse = formData.delayReason.trim() || undefined;
       const delayCategoryToUse = formData.delayCategory || undefined;
       
@@ -298,7 +330,11 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
         eventType: 'complete',
         eventDate: effectiveCompDate,
         user: activeRole,
-        docRef: formData.docRef || `COMP-${stageOrder}-${Date.now().toString().slice(-4)}`,
+        docRef: formData.docRef || `GRN-${stageOrder}-${Date.now().toString().slice(-4)}`,
+        orderedDate: formData.orderedDate,
+        expectedDate: formData.expectedDate,
+        receivedDate: effectiveCompDate,
+        inspectionResult: formData.inspectionResult || 'Passed',
         delayCategory: delayCategoryToUse,
         delayReason: delayReasonToUse
       });
@@ -310,7 +346,9 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
       setSuccessMessage(`Stage ${stageTitle} marked as Completed for ${targetLine.productName}.`);
       setTimeout(() => setSuccessMessage(null), 5000);
     } else {
-      const effectiveStartDate = formData.startDate || todayStr;
+      const effectiveStartDate = (stageKey === 'material_receipt' || key === 'material_receipt')
+        ? (formData.orderedDate || formData.startDate || todayStr)
+        : (formData.startDate || todayStr);
       const delayReasonToUse = formData.delayReason.trim() || undefined;
       const delayCategoryToUse = formData.delayCategory || undefined;
 
@@ -332,9 +370,12 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
         milestoneKey: key,
         eventType: 'start',
         eventDate: effectiveStartDate,
-        targetEndDate: formData.endDate || undefined,
+        targetEndDate: formData.expectedDate || formData.endDate || undefined,
         user: activeRole,
-        docRef: formData.docRef || `REF-${stageOrder}-${Date.now().toString().slice(-4)}`,
+        docRef: formData.docRef || `PO-MAT-${stageOrder}-${Date.now().toString().slice(-4)}`,
+        orderedDate: effectiveStartDate,
+        expectedDate: formData.expectedDate,
+        inspectionResult: formData.inspectionResult,
         delayCategory: delayCategoryToUse,
         delayReason: delayReasonToUse
       });
@@ -356,10 +397,19 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
     const ms = (line.milestones || [])[msIndex];
     const prevMs = msIndex > 0 ? (line.milestones || [])[msIndex - 1] : null;
 
+    const targetMat = line.materials?.find(m => m.isCriticalPath) || line.materials?.[0];
+    const msDur = ms?.committedDurationDays || targetMat?.leadTimeDays || 14;
+    const defOrder = targetMat?.orderedDate || (mode === 'start' ? (ms?.actualStartDate || prevMs?.actualEndDate || ms?.committedBaselineStartDate || todayStr) : (ms?.actualStartDate || ms?.committedBaselineStartDate || todayStr));
+    const defExpected = targetMat?.expectedDate || addDays(defOrder, msDur);
+    const defRec = (mode === 'complete')
+      ? (ms?.actualEndDate || targetMat?.receivedDate || todayStr)
+      : (targetMat?.receivedDate || '');
+    const defInsp = targetMat?.inspectionResult || 'Passed';
+
     // Initial date: start with previous milestone actual end date if available
     const defaultDate = mode === 'start'
-      ? (ms?.actualStartDate || prevMs?.actualEndDate || ms?.committedBaselineStartDate || todayStr)
-      : (ms?.actualEndDate || ms?.actualStartDate || prevMs?.actualEndDate || todayStr);
+      ? (stageKey === 'material_receipt' ? defOrder : (ms?.actualStartDate || prevMs?.actualEndDate || ms?.committedBaselineStartDate || todayStr))
+      : (stageKey === 'material_receipt' ? defRec : (ms?.actualEndDate || ms?.actualStartDate || prevMs?.actualEndDate || todayStr));
 
     setBatchModal({
       isOpen: true,
@@ -367,6 +417,10 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
       mode,
       selectedLineIds: [line.id],
       date: defaultDate,
+      orderedDate: defOrder,
+      expectedDate: defExpected,
+      receivedDate: defRec,
+      inspectionResult: defInsp,
       docRef: `${mode === 'start' ? 'START' : 'COMP'}-${stageOrder}-${Date.now().toString().slice(-4)}`,
       delayCategory: '',
       delayReason: ''
@@ -398,12 +452,34 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
     });
     if (!defaultBatchDate) defaultBatchDate = todayStr;
 
+    const initialLine = (initialLineIds.length > 0
+      ? group.po.productLines.find(x => initialLineIds.includes(x.id))
+      : null) || group.po.productLines[0];
+    const sampleMat = initialLine?.materials?.find(m => m.isCriticalPath) || initialLine?.materials?.[0];
+    const sampleMs = initialLine?.milestones?.find(m => m.key === stageKey);
+    const matDuration = (sampleMat && typeof sampleMat.leadTimeDays === 'number' && sampleMat.leadTimeDays > 0)
+      ? sampleMat.leadTimeDays
+      : (sampleMs?.committedDurationDays || sampleMs?.defaultDurationDays || 14);
+    const defOrder = sampleMat?.orderedDate || (mode === 'start' ? defaultBatchDate : (sampleMs?.actualStartDate || defaultBatchDate));
+    const defExpected = sampleMat?.expectedDate || addDays(defOrder, matDuration);
+    const defReceived = (mode === 'complete')
+      ? (sampleMat?.receivedDate || defaultBatchDate)
+      : (sampleMat?.receivedDate || '');
+
+    const initialDate = stageKey === 'material_receipt'
+      ? (mode === 'start' ? defOrder : defReceived)
+      : defaultBatchDate;
+
     setBatchModal({
       isOpen: true,
       po: group.po,
       mode,
       selectedLineIds: initialLineIds,
-      date: defaultBatchDate,
+      date: initialDate,
+      orderedDate: defOrder,
+      expectedDate: defExpected,
+      receivedDate: defReceived,
+      inspectionResult: 'Passed',
       docRef: `BATCH-${stageOrder}-${Date.now().toString().slice(-4)}`,
       delayCategory: '',
       delayReason: ''
@@ -418,8 +494,11 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
 
     setErrorMessage(null);
     const targetPO = batchModal.po;
+    const isMaterialReceipt = stageKey === 'material_receipt';
     const eventType = batchModal.mode;
-    const eventDate = batchModal.date;
+    const eventDate = isMaterialReceipt
+      ? (eventType === 'complete' ? (batchModal.receivedDate || batchModal.date) : (batchModal.orderedDate || batchModal.date))
+      : batchModal.date;
 
     const itemsToUpdate: Array<{
       poId: string;
@@ -431,6 +510,10 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
       docRef: string;
       delayCategory?: DelayCategory;
       delayReason?: string;
+      orderedDate?: string;
+      expectedDate?: string;
+      receivedDate?: string;
+      inspectionResult?: 'Passed' | 'Rejected' | 'Pending';
     }> = [];
 
     const errors: string[] = [];
@@ -446,18 +529,43 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
       const prevEnd = prevMs?.actualEndDate || prevMs?.forecastEndDate;
       const baselineStart = targetMs.committedBaselineStartDate || targetPO.poDate;
       const baselineEnd = targetMs.committedBaselineEndDate || targetPO.committedDeliveryDate;
+      const plannedDuration = targetMs.committedDurationDays || (baselineStart && baselineEnd ? getDaysDifference(baselineStart, baselineEnd) : 1);
 
       let newDelayFormed = 0;
-      if (eventType === 'start') {
-        const totalDelay = (baselineStart && eventDate && eventDate > baselineStart) ? getDaysDifference(baselineStart, eventDate) : 0;
-        const inheritedDelay = (baselineStart && prevEnd && prevEnd > baselineStart) ? Math.min(totalDelay, getDaysDifference(baselineStart, prevEnd)) : 0;
-        newDelayFormed = Math.max(0, totalDelay - inheritedDelay);
+
+      if (stageKey === 'material_receipt') {
+        const mat = line.materials?.find(m => m.isCriticalPath) || line.materials?.[0];
+        const lineLead = (mat && typeof mat.leadTimeDays === 'number' && mat.leadTimeDays > 0)
+          ? mat.leadTimeDays
+          : (targetMs.committedDurationDays || 14);
+
+        const targetStart = prevEnd || baselineStart;
+        const targetDelivery = targetStart ? addDays(targetStart, lineLead) : (targetMs.forecastEndDate || baselineEnd);
+        const crossingLine = batchModal.expectedDate || targetDelivery || baselineEnd;
+
+        if (eventType === 'start') {
+          const orderDate = batchModal.orderedDate || eventDate;
+          newDelayFormed = (orderDate && targetStart && orderDate > targetStart)
+            ? getDaysDifference(targetStart, orderDate)
+            : 0;
+        } else {
+          // Expected Delivery Date is the crossing line for Stage 7 delay calculation
+          const recDate = batchModal.receivedDate || eventDate;
+          newDelayFormed = (recDate && crossingLine && recDate > crossingLine)
+            ? getDaysDifference(crossingLine, recDate)
+            : 0;
+        }
+      } else if (eventType === 'start') {
+        const targetStart = prevEnd || baselineStart;
+        newDelayFormed = (targetStart && eventDate && eventDate > targetStart)
+          ? getDaysDifference(targetStart, eventDate)
+          : 0;
       } else {
-        const totalDelay = (baselineEnd && eventDate && eventDate > baselineEnd) ? getDaysDifference(baselineEnd, eventDate) : 0;
-        const effectiveStart = targetMs.actualStartDate || ((baselineStart && prevEnd && prevEnd > baselineStart) ? prevEnd : baselineStart);
-        const startDelay = (baselineStart && effectiveStart && effectiveStart > baselineStart) ? getDaysDifference(baselineStart, effectiveStart) : 0;
-        const inheritedDelay = Math.min(totalDelay, startDelay);
-        newDelayFormed = Math.max(0, totalDelay - inheritedDelay);
+        const effectiveStart = targetMs.actualStartDate || (prevEnd || baselineStart);
+        const targetEnd = targetMs.forecastEndDate || (effectiveStart ? addDays(effectiveStart, plannedDuration) : baselineEnd);
+        newDelayFormed = (targetEnd && eventDate && eventDate > targetEnd)
+          ? getDaysDifference(targetEnd, eventDate)
+          : 0;
       }
 
       if (newDelayFormed > 0 && batchModal.selectedLineIds.length > 1) {
@@ -500,7 +608,11 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
         user: activeRole,
         docRef: batchModal.docRef || `BATCH-${stageOrder}-${Date.now().toString().slice(-4)}`,
         delayCategory: delayCategoryToUse,
-        delayReason: delayReasonToUse
+        delayReason: delayReasonToUse,
+        orderedDate: batchModal.orderedDate,
+        expectedDate: batchModal.expectedDate,
+        receivedDate: eventType === 'complete' ? (batchModal.receivedDate || eventDate) : batchModal.receivedDate,
+        inspectionResult: batchModal.inspectionResult
       });
     }
 
@@ -953,18 +1065,14 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                                 </div>
 
                                 {(() => {
-                                  const linePlanStart = milestone.committedBaselineStartDate || po.poDate;
-                                  const linePlanEnd = milestone.committedBaselineEndDate || po.committedDeliveryDate;
-                                  const lineDur = Math.max(1, milestone.committedDurationDays || 1);
-                                  const linePlanDuration = (linePlanStart && linePlanEnd) ? Math.max(1, getDaysDifference(linePlanStart, linePlanEnd)) : lineDur;
-
-                                  const linePrevActualEnd = prevMilestone?.actualEndDate;
-                                  const linePrevEffectiveEnd = linePrevActualEnd || prevMilestone?.forecastEndDate;
-                                  const lineHasPrevDelayShift = Boolean(linePlanStart && linePrevEffectiveEnd && linePrevEffectiveEnd > linePlanStart);
-                                  const lineShiftDays = (lineHasPrevDelayShift && linePlanStart && linePrevEffectiveEnd) ? getDaysDifference(linePlanStart, linePrevEffectiveEnd) : 0;
-
-                                  const lineRevStart = milestone.actualStartDate || (lineHasPrevDelayShift ? linePrevEffectiveEnd : linePlanStart);
-                                  const lineRevEnd = milestone.actualEndDate || (lineShiftDays > 0 && lineRevStart ? addDays(lineRevStart, linePlanDuration) : linePlanEnd);
+                                  const {
+                                    revisedStart: lineRevStart,
+                                    revisedEnd: lineRevEnd,
+                                    shiftDays: lineShiftDays,
+                                    baselineStart: linePlanStart,
+                                    baselineEnd: linePlanEnd,
+                                    baselineDuration: linePlanDuration
+                                  } = getMilestoneRevisedDates(milestone, prevMilestone, po.poDate, po.committedDeliveryDate);
 
                                   return (
                                     <div className="space-y-1 text-xs font-mono mt-1">
@@ -983,7 +1091,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                                       {lineShiftDays > 0 && (
                                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-amber-900">
                                           <span className="text-amber-800">Revised Target: <strong className="text-amber-950">{lineRevStart} &rarr; {lineRevEnd}</strong></span>
-                                          <span className="text-[10px] text-amber-700 font-medium">Starts with prev end date ({linePrevEffectiveEnd})</span>
+                                          <span className="text-[10px] text-amber-700 font-medium">Shifted by schedule variance</span>
                                         </div>
                                       )}
                                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-slate-600">
@@ -1105,15 +1213,14 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
 
                             {/* Inline Edit Form for Single Line */}
                             {isEditing && (() => {
-                              const msPlanStart = milestone.committedBaselineStartDate || po.poDate;
-                              const msPlanEnd = milestone.committedBaselineEndDate || po.committedDeliveryDate;
-                              const dur = Math.max(1, milestone.committedDurationDays || 1);
-                              const msPlanDuration = (msPlanStart && msPlanEnd) ? Math.max(1, getDaysDifference(msPlanStart, msPlanEnd)) : dur;
-
-                              const prevEffectiveEnd = prevMilestone ? (prevMilestone.actualEndDate || prevMilestone.forecastEndDate) : undefined;
-                              const msRevStart = milestone.actualStartDate || ((msPlanStart && prevEffectiveEnd && prevEffectiveEnd > msPlanStart) ? prevEffectiveEnd : msPlanStart);
-                              const msStartShift = (msPlanStart && msRevStart && msRevStart > msPlanStart) ? getDaysDifference(msPlanStart, msRevStart) : 0;
-                              const msRevEnd = msStartShift > 0 && msRevStart ? addDays(msRevStart, msPlanDuration) : msPlanEnd;
+                              const {
+                                revisedStart: msRevStart,
+                                revisedEnd: msRevEnd,
+                                shiftDays: msStartShift,
+                                baselineStart: msPlanStart,
+                                baselineEnd: msPlanEnd,
+                                baselineDuration: msPlanDuration
+                              } = getMilestoneRevisedDates(milestone, prevMilestone, po.poDate, po.committedDeliveryDate);
 
                               return (
                                 <div className="mt-3 p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-4">
@@ -1144,33 +1251,170 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                                     </div>
                                   </div>
 
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                  <div>
-                                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                                      Stage Start Date {milestone.actualStartDate ? '(Actual)' : '(Target / Actual)'}
-                                    </label>
-                                    <input
-                                      type="date"
-                                      min={stageOrder === 1 ? addDays(todayStr, -7) : (prevMilestone?.actualEndDate || prevMilestone?.forecastEndDate || undefined)}
-                                      value={formData.startDate}
-                                      onChange={e => setFormData(prev => ({ ...prev, startDate: e.target.value }))}
-                                      className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
-                                    />
-                                  </div>
+                                  {stageKey === 'material_receipt' ? (
+                                    <div className="p-3 bg-emerald-50/70 border border-emerald-200/90 rounded-xl space-y-3">
+                                      <div className="flex items-center justify-between text-xs font-bold text-emerald-950 uppercase tracking-wider font-mono">
+                                        <span className="flex items-center gap-1.5">
+                                          <PackageCheck className="w-4 h-4 text-emerald-700" />
+                                          Raw Material Procurement & Goods Receipt (GRN)
+                                        </span>
+                                        <span className="text-[10px] text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded font-mono font-bold">
+                                          Stage 7 GRN
+                                        </span>
+                                      </div>
 
-                                  <div>
-                                    <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                                      Stage End Date (Target / Actual)
-                                    </label>
-                                    <input
-                                      type="date"
-                                      min={formData.startDate || prevMilestone?.actualEndDate || prevMilestone?.forecastEndDate || undefined}
-                                      value={formData.endDate}
-                                      onChange={e => setFormData(prev => ({ ...prev, endDate: e.target.value }))}
-                                      className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
-                                    />
-                                  </div>
-                                </div>
+                                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                        <div>
+                                          <div className="flex items-center justify-between mb-1">
+                                            <label className="block text-[11px] font-bold text-slate-700">
+                                              Material Order Date <span className="text-rose-600">*</span>
+                                            </label>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                const lead = line.materials?.[0]?.leadTimeDays || 14;
+                                                setFormData(prev => ({
+                                                  ...prev,
+                                                  orderedDate: todayStr,
+                                                  startDate: todayStr,
+                                                  expectedDate: addDays(todayStr, lead)
+                                                }));
+                                              }}
+                                              className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer"
+                                            >
+                                              Today
+                                            </button>
+                                          </div>
+                                          <input
+                                            type="date"
+                                            value={formData.orderedDate || formData.startDate}
+                                            onChange={e => {
+                                              const newOrder = e.target.value;
+                                              const lead = line.materials?.[0]?.leadTimeDays || 14;
+                                              const newExp = newOrder ? addDays(newOrder, lead) : formData.expectedDate;
+                                              setFormData(prev => ({
+                                                ...prev,
+                                                orderedDate: newOrder,
+                                                startDate: newOrder,
+                                                expectedDate: newExp || prev.expectedDate
+                                              }));
+                                            }}
+                                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
+                                          />
+                                          <p className="text-[10px] text-slate-500 mt-0.5">PO issued to supplier</p>
+                                        </div>
+
+                                        <div>
+                                          <div className="flex items-center justify-between mb-1">
+                                            <label className="block text-[11px] font-bold text-slate-700">
+                                              Expected Delivery Date <span className="text-rose-600">*</span>
+                                            </label>
+                                            <span className="text-[10px] font-mono text-slate-500">+{line.materials?.[0]?.leadTimeDays || 14}d Lead</span>
+                                          </div>
+                                          <input
+                                            type="date"
+                                            value={formData.expectedDate || formData.endDate}
+                                            onChange={e => setFormData(prev => ({ ...prev, expectedDate: e.target.value }))}
+                                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
+                                          />
+                                          <p className="text-[10px] text-slate-500 mt-0.5">Baseline target arrival</p>
+                                        </div>
+
+                                        <div>
+                                          <div className="flex items-center justify-between mb-1">
+                                            <label className="block text-[11px] font-bold text-slate-700">
+                                              Actual Received Date (GRN) <span className="text-rose-600">*</span>
+                                            </label>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setFormData(prev => ({
+                                                  ...prev,
+                                                  receivedDate: todayStr,
+                                                  endDate: todayStr
+                                                }));
+                                              }}
+                                              className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer"
+                                            >
+                                              Today
+                                            </button>
+                                          </div>
+                                          <input
+                                            type="date"
+                                            value={formData.receivedDate || formData.endDate}
+                                            onChange={e => {
+                                              const newRec = e.target.value;
+                                              setFormData(prev => ({
+                                                ...prev,
+                                                receivedDate: newRec,
+                                                endDate: newRec
+                                              }));
+                                            }}
+                                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
+                                          />
+                                          <p className="text-[10px] text-slate-500 mt-0.5">Goods receipt note (GRN)</p>
+                                        </div>
+                                      </div>
+
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-emerald-200/60">
+                                        <div>
+                                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                            Incoming Quality Inspection Clearance <span className="text-rose-600">*</span>
+                                          </label>
+                                          <select
+                                            value={formData.inspectionResult || 'Passed'}
+                                            onChange={e => setFormData(prev => ({ ...prev, inspectionResult: e.target.value as any }))}
+                                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-semibold"
+                                          >
+                                            <option value="Passed">Passed (Approved for Machining)</option>
+                                            <option value="Pending">Pending (Inspection in progress)</option>
+                                            <option value="Rejected">Rejected (Non-conformance raised)</option>
+                                          </select>
+                                        </div>
+
+                                        <div>
+                                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                                            GRN / Inspection Reference Document
+                                          </label>
+                                          <input
+                                            type="text"
+                                            placeholder="e.g. GRN-2026-9041 / MTC-001"
+                                            value={formData.docRef}
+                                            onChange={e => setFormData(prev => ({ ...prev, docRef: e.target.value }))}
+                                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
+                                          />
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                      <div>
+                                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                                          Stage Start Date {milestone.actualStartDate ? '(Actual)' : '(Target / Actual)'}
+                                        </label>
+                                        <input
+                                          type="date"
+                                          min={stageOrder === 1 ? addDays(todayStr, -7) : (prevMilestone?.actualEndDate || prevMilestone?.forecastEndDate || undefined)}
+                                          value={formData.startDate}
+                                          onChange={e => setFormData(prev => ({ ...prev, startDate: e.target.value }))}
+                                          className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
+                                        />
+                                      </div>
+
+                                      <div>
+                                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                                          Stage End Date (Target / Actual)
+                                        </label>
+                                        <input
+                                          type="date"
+                                          min={formData.startDate || prevMilestone?.actualEndDate || prevMilestone?.forecastEndDate || undefined}
+                                          value={formData.endDate}
+                                          onChange={e => setFormData(prev => ({ ...prev, endDate: e.target.value }))}
+                                          className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
 
                                 {isCardDelayed && (
                                   <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl space-y-2.5 text-xs">
@@ -1473,10 +1717,10 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
       {/* ACTION & DATE PROMPT MODAL */}
       {batchModal.isOpen && batchModal.po && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden space-y-4 text-slate-800">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden text-slate-800">
             
             {/* Modal Header */}
-            <div className="bg-slate-900 p-5 text-white flex items-center justify-between">
+            <div className="bg-slate-900 p-5 text-white flex items-center justify-between shrink-0">
               <div>
                 <div className="text-[10px] font-mono font-bold uppercase text-emerald-400 tracking-wider">
                   STAGE EXECUTION • STAGE {stageOrder} OF 14 ({stageTitle})
@@ -1502,7 +1746,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 space-y-4 text-xs">
+            <div className="p-4 sm:p-6 space-y-4 text-xs flex-1 overflow-y-auto min-h-0">
               
               {errorMessage && (
                 <div className="p-3 bg-rose-50 border border-rose-300 rounded-xl text-rose-900 font-medium flex items-center gap-2">
@@ -1566,11 +1810,28 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                             disabled={!isPrereqDone}
                             checked={isChecked}
                             onChange={e => {
-                              if (e.target.checked) {
-                                setBatchModal(prev => ({ ...prev, selectedLineIds: [...prev.selectedLineIds, line.id] }));
-                              } else {
-                                setBatchModal(prev => ({ ...prev, selectedLineIds: prev.selectedLineIds.filter(id => id !== line.id) }));
-                              }
+                              const isNowChecked = e.target.checked;
+                              const nextSelectedIds = isNowChecked
+                                ? [...batchModal.selectedLineIds, line.id]
+                                : batchModal.selectedLineIds.filter(id => id !== line.id);
+
+                              const activeLine = isNowChecked
+                                ? line
+                                : (batchModal.po?.productLines.find(l => nextSelectedIds.includes(l.id)) || batchModal.po?.productLines[0]);
+                              const activeMat = activeLine?.materials?.find(m => m.isCriticalPath) || activeLine?.materials?.[0];
+                              const activeMs = activeLine?.milestones?.find(m => m.key === stageKey);
+                              const activeLead = (activeMat && typeof activeMat.leadTimeDays === 'number' && activeMat.leadTimeDays > 0)
+                                ? activeMat.leadTimeDays
+                                : (activeMs?.committedDurationDays || activeMs?.defaultDurationDays || 14);
+
+                              const orderBase = batchModal.orderedDate || batchModal.date;
+                              const newExpected = (orderBase && activeLead) ? addDays(orderBase, activeLead) : batchModal.expectedDate;
+
+                              setBatchModal(prev => ({
+                                ...prev,
+                                selectedLineIds: nextSelectedIds,
+                                expectedDate: stageKey === 'material_receipt' ? newExpected : prev.expectedDate
+                              }));
                             }}
                             className="rounded text-emerald-600 focus:ring-emerald-500"
                           />
@@ -1586,58 +1847,217 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                 </div>
               </div>
 
-              {/* Date Inputs */}
-              <div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                    {batchModal.mode === 'start' ? 'Actual Start Date' : 'Actual Completion Date'} <span className="text-rose-600">*</span>
-                  </label>
-                  <input
-                    type="date"
-                    value={batchModal.date}
-                    onChange={e => setBatchModal(prev => ({ ...prev, date: e.target.value }))}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs bg-white font-mono font-bold text-slate-800 focus:border-emerald-600"
-                  />
-                  {(() => {
-                    const sampleLine = batchModal.po.productLines[0];
-                    const sampleMs = sampleLine?.milestones.find(m => m.key === stageKey);
-                    const msPlanStart = sampleMs?.committedBaselineStartDate || batchModal.po.poDate;
-                    const msPlanEnd = sampleMs?.committedBaselineEndDate || batchModal.po.committedDeliveryDate;
-                    const msPlanDuration = sampleMs?.committedDurationDays || (msPlanStart && msPlanEnd ? getDaysDifference(msPlanStart, msPlanEnd) : 1);
+              {/* Date Inputs & Schedule Context */}
+              {(() => {
+                const selectedLine = (batchModal.selectedLineIds.length > 0 
+                  ? batchModal.po.productLines.find(l => batchModal.selectedLineIds.includes(l.id))
+                  : null) || batchModal.po.productLines[0];
 
-                    const sampleMsIdx = sampleLine ? sampleLine.milestones.findIndex(m => m.key === stageKey) : -1;
-                    const samplePrevMs = sampleMsIdx > 0 ? sampleLine.milestones[sampleMsIdx - 1] : null;
-                    const samplePrevEnd = samplePrevMs?.actualEndDate || samplePrevMs?.forecastEndDate;
-                    const sampleStartDelay = (msPlanStart && samplePrevEnd && samplePrevEnd > msPlanStart)
-                      ? getDaysDifference(msPlanStart, samplePrevEnd)
-                      : 0;
+                const selectedMat = selectedLine?.materials?.find(m => m.isCriticalPath) || selectedLine?.materials?.[0];
+                const selectedMs = selectedLine?.milestones.find(m => m.key === stageKey);
 
-                    const msRevStart = sampleStartDelay > 0 && samplePrevEnd ? samplePrevEnd : msPlanStart;
-                    const msRevEnd = sampleStartDelay > 0 ? addDays(msRevStart, msPlanDuration) : msPlanEnd;
+                const selectedLeadTime = (selectedMat && typeof selectedMat.leadTimeDays === 'number' && selectedMat.leadTimeDays > 0)
+                  ? selectedMat.leadTimeDays
+                  : (selectedMs?.committedDurationDays || selectedMs?.defaultDurationDays || (selectedMs?.committedBaselineStartDate && selectedMs?.committedBaselineEndDate ? getDaysDifference(selectedMs.committedBaselineStartDate, selectedMs.committedBaselineEndDate) : 14));
 
-                    return (
-                      <div className="mt-2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1 font-mono text-[11px]">
-                        <div className="flex items-center justify-between text-slate-600">
-                          <span>Planned Baseline: <strong className="text-slate-800">{msPlanStart} &rarr; {msPlanEnd}</strong></span>
-                          <span className="font-bold text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200">
-                            {msPlanDuration} days planned
+                const msPlanStart = selectedMs?.committedBaselineStartDate || batchModal.po.poDate;
+                const msPlanEnd = selectedMs?.committedBaselineEndDate || batchModal.po.committedDeliveryDate;
+                const msPlanDuration = stageKey === 'material_receipt'
+                  ? selectedLeadTime
+                  : (selectedMs?.committedDurationDays || (msPlanStart && msPlanEnd ? getDaysDifference(msPlanStart, msPlanEnd) : 1));
+
+                const sampleMsIdx = selectedLine ? selectedLine.milestones.findIndex(m => m.key === stageKey) : -1;
+                const samplePrevMs = sampleMsIdx > 0 ? selectedLine.milestones[sampleMsIdx - 1] : null;
+                const samplePrevEnd = samplePrevMs?.actualEndDate || samplePrevMs?.forecastEndDate;
+                const sampleStartDelay = (msPlanStart && samplePrevEnd && samplePrevEnd > msPlanStart)
+                  ? getDaysDifference(msPlanStart, samplePrevEnd)
+                  : 0;
+
+                const msRevStart = sampleStartDelay > 0 && samplePrevEnd ? samplePrevEnd : msPlanStart;
+                const msRevEnd = stageKey === 'material_receipt'
+                  ? (msRevStart ? addDays(msRevStart, selectedLeadTime) : msPlanEnd)
+                  : (sampleStartDelay > 0 ? addDays(msRevStart, msPlanDuration) : msPlanEnd);
+
+                return (
+                  <div>
+                    {stageKey === 'material_receipt' ? (
+                      <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-3 mb-3">
+                        <div className="text-xs font-bold text-emerald-950 uppercase tracking-wider font-mono flex items-center justify-between">
+                          <span className="flex items-center gap-1.5">
+                            <PackageCheck className="w-4 h-4 text-emerald-700" />
+                            Stores Raw Material Receipt & GRN Verification
                           </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded font-mono font-bold">
+                              Stage 7 (GRN)
+                            </span>
+                            <span className="text-[10px] text-blue-800 bg-blue-100 border border-blue-300 px-2 py-0.5 rounded font-mono font-bold">
+                              Lead Time: {selectedLeadTime}d ({selectedLine?.productName})
+                            </span>
+                          </div>
                         </div>
-                        <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
-                          <span className={sampleStartDelay > 0 ? "text-amber-800" : "text-emerald-700"}>
-                            Revised Target: <strong className={sampleStartDelay > 0 ? "text-amber-950" : "text-emerald-900"}>{msRevStart} &rarr; {msRevEnd}</strong>
-                          </span>
-                          <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded border ${
-                            sampleStartDelay > 0 ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-emerald-50 text-emerald-800 border-emerald-200"
-                          }`}>
-                            {sampleStartDelay > 0 ? `+${sampleStartDelay}d shift from previous delay` : 'On original baseline'}
-                          </span>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="block text-[11px] font-bold text-slate-700">
+                                Material Order Date <span className="text-rose-600">*</span>
+                              </label>
+                              <span className="text-[10px] font-mono text-slate-500">
+                                Plan: <strong className="text-slate-700">{msPlanStart}</strong>
+                              </span>
+                            </div>
+                            <input
+                              type="date"
+                              value={batchModal.orderedDate || batchModal.date}
+                              onChange={e => {
+                                const val = e.target.value;
+                                const newExp = val ? addDays(val, selectedLeadTime) : batchModal.expectedDate;
+                                setBatchModal(prev => ({
+                                  ...prev,
+                                  orderedDate: val,
+                                  date: prev.mode === 'start' ? val : prev.date,
+                                  expectedDate: newExp || prev.expectedDate
+                                }));
+                              }}
+                              className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
+                            />
+                            <div className="flex items-center justify-between text-[10px] mt-0.5 font-mono">
+                              <span className="text-slate-500">PO issued to supplier</span>
+                              <span className={sampleStartDelay > 0 ? "text-amber-800 font-bold" : "text-emerald-700 font-bold"}>
+                                Rev: {msRevStart}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="block text-[11px] font-bold text-slate-700">
+                                Expected Delivery Date <span className="text-rose-600">*</span>
+                              </label>
+                              <span className="text-[10px] font-mono text-slate-500">
+                                Plan: <strong className="text-slate-700">{msPlanEnd}</strong>
+                              </span>
+                            </div>
+                            <input
+                              type="date"
+                              value={batchModal.expectedDate || batchModal.date}
+                              onChange={e => setBatchModal(prev => ({ ...prev, expectedDate: e.target.value }))}
+                              className="w-full px-2.5 py-1.5 border border-emerald-400 bg-white rounded-lg text-xs font-mono font-bold text-emerald-950 focus:ring-1 focus:ring-emerald-500"
+                            />
+                            <div className="flex items-center justify-between text-[10px] mt-0.5 font-mono">
+                              <span className="text-emerald-800 font-bold bg-emerald-100/70 px-1 rounded">Crossing Line</span>
+                              <span className={sampleStartDelay > 0 ? "text-amber-800 font-bold" : "text-emerald-700 font-bold"}>
+                                Rev: {msRevEnd}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="block text-[11px] font-bold text-slate-700">
+                                Actual Received Date (GRN) {batchModal.mode === 'complete' && <span className="text-rose-600">*</span>}
+                              </label>
+                              <span className="text-[10px] font-mono text-slate-600">
+                                Target: <strong className="text-emerald-800">{batchModal.expectedDate || msRevEnd}</strong>
+                              </span>
+                            </div>
+                            <input
+                              type="date"
+                              value={batchModal.receivedDate || (batchModal.mode === 'complete' ? batchModal.date : '')}
+                              onChange={e => setBatchModal(prev => ({
+                                ...prev,
+                                receivedDate: e.target.value,
+                                date: prev.mode === 'complete' ? e.target.value : prev.date
+                              }))}
+                              className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono font-bold text-slate-800"
+                            />
+                            <div className="flex items-center justify-between text-[10px] mt-0.5 font-mono">
+                              <span className="text-slate-500">Receipt at Stores</span>
+                              <span className="text-slate-600">
+                                {batchModal.receivedDate && batchModal.expectedDate && batchModal.receivedDate > batchModal.expectedDate
+                                  ? `+${getDaysDifference(batchModal.expectedDate, batchModal.receivedDate)}d beyond target`
+                                  : 'Within expected delivery'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-emerald-200/60">
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                              Incoming Quality Inspection Clearance
+                            </label>
+                            <select
+                              value={batchModal.inspectionResult || 'Passed'}
+                              onChange={e => setBatchModal(prev => ({ ...prev, inspectionResult: e.target.value as any }))}
+                              className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-semibold"
+                            >
+                              <option value="Passed">Passed (Approved for Machining)</option>
+                              <option value="Pending">Pending (Inspection in progress)</option>
+                              <option value="Rejected">Rejected (Non-conformance raised)</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                              GRN / Verification Document Ref
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="e.g. GRN-2026-8801"
+                              value={batchModal.docRef}
+                              onChange={e => setBatchModal(prev => ({ ...prev, docRef: e.target.value }))}
+                              className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
+                            />
+                          </div>
                         </div>
                       </div>
-                    );
-                  })()}
-                </div>
-              </div>
+                    ) : (
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block text-[11px] font-bold text-slate-700">
+                            {batchModal.mode === 'start' ? 'Actual Start Date' : 'Actual Completion Date'} <span className="text-rose-600">*</span>
+                          </label>
+                          <div className="flex items-center gap-2 text-[10px] font-mono">
+                            <span className="text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                              Planned: <strong>{batchModal.mode === 'start' ? msPlanStart : msPlanEnd}</strong>
+                            </span>
+                            <span className={sampleStartDelay > 0 ? "text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-bold" : "text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 font-bold"}>
+                              Revised Target: <strong>{batchModal.mode === 'start' ? msRevStart : msRevEnd}</strong>
+                            </span>
+                          </div>
+                        </div>
+                        <input
+                          type="date"
+                          value={batchModal.date}
+                          onChange={e => setBatchModal(prev => ({ ...prev, date: e.target.value }))}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs bg-white font-mono font-bold text-slate-800 focus:border-emerald-600"
+                        />
+                      </div>
+                    )}
+
+                    <div className="mt-2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1 font-mono text-[11px]">
+                      <div className="flex items-center justify-between text-slate-600">
+                        <span>Planned Baseline: <strong className="text-slate-800">{msPlanStart} &rarr; {msPlanEnd}</strong></span>
+                        <span className="font-bold text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200">
+                          {msPlanDuration} days planned
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
+                        <span className={sampleStartDelay > 0 ? "text-amber-800" : "text-emerald-700"}>
+                          Revised Target: <strong className={sampleStartDelay > 0 ? "text-amber-950" : "text-emerald-900"}>{msRevStart} &rarr; {msRevEnd}</strong>
+                        </span>
+                        <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded border ${
+                          sampleStartDelay > 0 ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-emerald-50 text-emerald-800 border-emerald-200"
+                        }`}>
+                          {sampleStartDelay > 0 ? `+${sampleStartDelay}d shift from previous delay` : 'On original baseline'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Delay Reason & Previous Delays Section */}
               {(() => {
@@ -1690,36 +2110,63 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                   const baselineStart = ms.committedBaselineStartDate || batchModal.po?.poDate;
                   const baselineEnd = ms.committedBaselineEndDate || batchModal.po?.committedDeliveryDate;
 
-                  if (batchModal.mode === 'start') {
-                    // Strictly: delay exists whenever start date exceeds baseline start date!
-                    const totalDelay = (baselineStart && batchModal.date && batchModal.date > baselineStart)
-                      ? getDaysDifference(baselineStart, batchModal.date)
-                      : 0;
-                    // Inherited delay from previous milestone pushing this stage's start date
-                    const inheritedDelay = (baselineStart && prevEnd && prevEnd > baselineStart)
-                      ? Math.min(totalDelay, getDaysDifference(baselineStart, prevEnd))
-                      : 0;
-                    const newDelay = Math.max(0, totalDelay - inheritedDelay);
+                  const plannedDuration = ms.committedDurationDays || (baselineStart && baselineEnd ? getDaysDifference(baselineStart, baselineEnd) : 1);
 
-                    if (totalDelay > maxTotalDelay) maxTotalDelay = totalDelay;
-                    if (inheritedDelay > maxNetInheritedDelay) maxNetInheritedDelay = inheritedDelay;
-                    if (newDelay > maxNewDelayFormed) maxNewDelayFormed = newDelay;
+                  let newDelay = 0;
+                  let inheritedDelay = 0;
+                  let totalDelay = 0;
+
+                  if (stageKey === 'material_receipt') {
+                    const mat = l.materials?.find(m => m.isCriticalPath) || l.materials?.[0];
+                    const lineLead = (mat && typeof mat.leadTimeDays === 'number' && mat.leadTimeDays > 0)
+                      ? mat.leadTimeDays
+                      : (ms.committedDurationDays || 14);
+
+                    const targetStart = prevEnd || baselineStart;
+                    const targetDelivery = targetStart ? addDays(targetStart, lineLead) : (ms.forecastEndDate || baselineEnd);
+                    const crossingLine = batchModal.expectedDate || targetDelivery || baselineEnd;
+
+                    if (batchModal.mode === 'start') {
+                      const orderDate = batchModal.orderedDate || batchModal.date;
+                      newDelay = (orderDate && targetStart && orderDate > targetStart)
+                        ? getDaysDifference(targetStart, orderDate)
+                        : 0;
+                    } else {
+                      // Expected Delivery Date is the crossing line for Stage 7 delay calculation
+                      const recDate = batchModal.receivedDate || batchModal.date;
+                      newDelay = (recDate && crossingLine && recDate > crossingLine)
+                        ? getDaysDifference(crossingLine, recDate)
+                        : 0;
+                    }
+
+                    inheritedDelay = (baselineStart && prevEnd && prevEnd > baselineStart)
+                      ? getDaysDifference(baselineStart, prevEnd)
+                      : 0;
+                    totalDelay = inheritedDelay + newDelay;
+                  } else if (batchModal.mode === 'start') {
+                    const targetStart = prevEnd || baselineStart;
+                    newDelay = (targetStart && batchModal.date && batchModal.date > targetStart)
+                      ? getDaysDifference(targetStart, batchModal.date)
+                      : 0;
+                    inheritedDelay = (baselineStart && prevEnd && prevEnd > baselineStart)
+                      ? getDaysDifference(baselineStart, prevEnd)
+                      : 0;
+                    totalDelay = inheritedDelay + newDelay;
                   } else {
-                    // Strictly: delay exists whenever completion date exceeds planned baseline end date! Even 1 date after plan is delay!
-                    const totalDelay = (baselineEnd && batchModal.date && batchModal.date > baselineEnd)
-                      ? getDaysDifference(baselineEnd, batchModal.date)
+                    const effectiveStart = ms.actualStartDate || (prevEnd || baselineStart);
+                    const targetEnd = ms.forecastEndDate || (effectiveStart ? addDays(effectiveStart, plannedDuration) : baselineEnd);
+                    newDelay = (targetEnd && batchModal.date && batchModal.date > targetEnd)
+                      ? getDaysDifference(targetEnd, batchModal.date)
                       : 0;
-                    const effectiveStart = ms.actualStartDate || ((baselineStart && prevEnd && prevEnd > baselineStart) ? prevEnd : baselineStart);
-                    const startDelay = (baselineStart && effectiveStart && effectiveStart > baselineStart)
-                      ? getDaysDifference(baselineStart, effectiveStart)
+                    inheritedDelay = (baselineStart && prevEnd && prevEnd > baselineStart)
+                      ? getDaysDifference(baselineStart, prevEnd)
                       : 0;
-                    const inheritedDelay = Math.min(totalDelay, startDelay);
-                    const newDelay = Math.max(0, totalDelay - inheritedDelay);
-
-                    if (totalDelay > maxTotalDelay) maxTotalDelay = totalDelay;
-                    if (inheritedDelay > maxNetInheritedDelay) maxNetInheritedDelay = inheritedDelay;
-                    if (newDelay > maxNewDelayFormed) maxNewDelayFormed = newDelay;
+                    totalDelay = inheritedDelay + newDelay;
                   }
+
+                  if (totalDelay > maxTotalDelay) maxTotalDelay = totalDelay;
+                  if (inheritedDelay > maxNetInheritedDelay) maxNetInheritedDelay = inheritedDelay;
+                  if (newDelay > maxNewDelayFormed) maxNewDelayFormed = newDelay;
                 });
 
                 // Preceding delay sources are ONLY shown if this stage actually inherited a delay!
@@ -1848,7 +2295,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
             </div>
 
             {/* Modal Footer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
               <span className="text-[11px] font-mono text-slate-500">
                 Applying to {batchModal.selectedLineIds.length} line(s)
               </span>

@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { X, AlertTriangle, ShieldCheck, CheckCircle2 } from 'lucide-react';
 import type { Milestone, ProductLine, PurchaseOrder } from '../../types';
 import { isMilestoneOwnedByRole } from '../../types';
-import { getDaysDifference, todayLocal, addDays } from '../../services/calculationEngine';
+import { getDaysDifference, todayLocal, addDays, getMilestoneRevisedDates } from '../../services/calculationEngine';
 
 interface ManualInputModalProps {
   isOpen: boolean;
@@ -22,28 +22,34 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
   milestone,
   eventType
 }) => {
-  const { updateMilestoneEvent, activeRole } = useApp();
+  const { updateMilestoneEvent, activeRole, purchaseOrders } = useApp();
   const todayStr = todayLocal();
-  const msIndex = productLine.milestones.findIndex(m => m.key === milestone.key);
-  const previousMs = msIndex > 0 ? productLine.milestones[msIndex - 1] : undefined;
+
+  // Retrieve freshest references from store to avoid role-switch stale props
+  const currentPo = purchaseOrders.find(p => p.id === po.id) || po;
+  const currentProductLine = currentPo.productLines.find(l => l.id === productLine.id) || productLine;
+  const currentMilestone = currentProductLine.milestones.find(m => m.id === milestone.id) || milestone;
+
+  const msIndex = currentProductLine.milestones.findIndex(m => m.key === currentMilestone.key);
+  const previousMs = msIndex > 0 ? currentProductLine.milestones[msIndex - 1] : undefined;
   // Use actualEndDate as the authoritative previous end — this is what the chain must start from
   const previousMsActualEnd = previousMs?.actualEndDate;
   const prevEffectiveEnd = previousMsActualEnd || previousMs?.forecastEndDate;
   // Floor for completion date must only be an actual event (actual start or previous actual end)
-  const currentMsStart = milestone.actualStartDate || previousMsActualEnd;
+  const currentMsStart = currentMilestone.actualStartDate || previousMsActualEnd;
 
-  const isMaterialStage = milestone.key === 'material_receipt';
-  const criticalMat = productLine.materials?.find(m => m.isCriticalPath) || productLine.materials?.[0];
-  const matLeadTime = criticalMat?.leadTimeDays || milestone.committedDurationDays || 14;
+  const isMaterialStage = currentMilestone.key === 'material_receipt';
+  const criticalMat = currentProductLine.materials?.find(m => m.isCriticalPath) || currentProductLine.materials?.[0];
+  const matLeadTime = criticalMat?.leadTimeDays || currentMilestone.committedDurationDays || 14;
 
-  const defaultOrderDate = criticalMat?.orderedDate || previousMsActualEnd || milestone.actualStartDate || milestone.committedBaselineStartDate || po.poDate || todayStr;
+  const defaultOrderDate = criticalMat?.orderedDate || previousMsActualEnd || currentMilestone.actualStartDate || currentMilestone.committedBaselineStartDate || currentPo.poDate || todayStr;
   const defaultExpectedDate = criticalMat?.expectedDate || addDays(defaultOrderDate, matLeadTime);
 
   const rawDefault = eventType === 'start'
-    ? (milestone.actualStartDate || previousMsActualEnd || prevEffectiveEnd || milestone.committedBaselineStartDate || todayStr)
+    ? (currentMilestone.actualStartDate || previousMsActualEnd || prevEffectiveEnd || currentMilestone.committedBaselineStartDate || todayStr)
     : isMaterialStage
-    ? (milestone.actualEndDate || criticalMat?.receivedDate || defaultExpectedDate || todayStr)
-    : (milestone.actualEndDate || milestone.actualStartDate || previousMsActualEnd || todayStr);
+    ? (currentMilestone.actualEndDate || criticalMat?.receivedDate || defaultExpectedDate || todayStr)
+    : (currentMilestone.actualEndDate || currentMilestone.actualStartDate || previousMsActualEnd || todayStr);
 
   const defaultInitialDate = rawDefault;
 
@@ -71,7 +77,7 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
     setExpectedDate(defaultExpectedDate);
     setInspectionResult(criticalMat?.inspectionResult || 'Passed');
     setErrorMessage(null);
-  }, [isOpen, milestone.id, eventType, defaultInitialDate, defaultOrderDate, defaultExpectedDate]);
+  }, [isOpen, currentMilestone.id, eventType, defaultInitialDate, defaultOrderDate, defaultExpectedDate]);
 
   if (!isOpen) return null;
 
@@ -87,55 +93,80 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
     }
   };
 
-  const isRoleAuthorized = isMilestoneOwnedByRole(milestone.key, activeRole);
+  const isRoleAuthorized = isMilestoneOwnedByRole(currentMilestone.key, activeRole);
   const isPreviousDone = !previousMs || previousMs.status === 'Completed' || Boolean(previousMs.actualEndDate) || previousMs.completionPct === 100;
 
-  const dur = Math.max(1, milestone.committedDurationDays || 1);
-  const baselineStart = milestone.committedBaselineStartDate;
-  const baselineEnd = milestone.committedBaselineEndDate;
+  const dur = Math.max(1, currentMilestone.committedDurationDays || 1);
+  const baselineStart = currentMilestone.committedBaselineStartDate || currentPo.poDate;
+  const baselineEnd = currentMilestone.committedBaselineEndDate || currentPo.committedDeliveryDate;
   const baselineDuration = (baselineStart && baselineEnd) ? Math.max(1, getDaysDifference(baselineStart, baselineEnd)) : dur;
+
+  // Single canonical date calculation across all roles
+  const canonicalDates = getMilestoneRevisedDates(currentMilestone, previousMs, currentPo.poDate, currentPo.committedDeliveryDate);
+
+  let targetRevisedStart = canonicalDates.revisedStart;
+  let targetRevisedEnd = canonicalDates.revisedEnd;
+
+  if (isMaterialStage && orderedDate) {
+    if (orderedDate > baselineStart) {
+      targetRevisedStart = orderedDate;
+      targetRevisedEnd = expectedDate || addDays(orderedDate, matLeadTime);
+    }
+  }
+
+  const precedingStartDelay = (baselineStart && targetRevisedStart && targetRevisedStart > baselineStart)
+    ? getDaysDifference(baselineStart, targetRevisedStart)
+    : canonicalDates.shiftDays;
 
   let totalDelay = 0;
   let inheritedDelayDays = 0;
   let newDelayFormed = 0;
   let revisedTarget = '';
 
-  if (eventType === 'start') {
-    totalDelay = (baselineStart && eventDate > baselineStart)
-      ? getDaysDifference(baselineStart, eventDate)
+  if (isMaterialStage) {
+    const targetStart = prevEffectiveEnd || baselineStart;
+    const targetDelivery = targetStart ? addDays(targetStart, matLeadTime) : (currentMilestone.forecastEndDate || baselineEnd);
+    const crossingLine = expectedDate || targetDelivery || baselineEnd;
+
+    if (eventType === 'start') {
+      newDelayFormed = (orderedDate && targetStart && orderedDate > targetStart)
+        ? getDaysDifference(targetStart, orderedDate)
+        : 0;
+      revisedTarget = targetStart || baselineStart || '';
+    } else {
+      // Expected Delivery Date is the crossing line for Stage 7 delay calculation
+      newDelayFormed = (eventDate && crossingLine && eventDate > crossingLine)
+        ? getDaysDifference(crossingLine, eventDate)
+        : 0;
+      revisedTarget = crossingLine || baselineEnd || '';
+    }
+
+    inheritedDelayDays = (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart)
+      ? getDaysDifference(baselineStart, prevEffectiveEnd)
+      : 0;
+    totalDelay = inheritedDelayDays + newDelayFormed;
+  } else if (eventType === 'start') {
+    const targetStart = prevEffectiveEnd || baselineStart;
+    newDelayFormed = (targetStart && eventDate && eventDate > targetStart)
+      ? getDaysDifference(targetStart, eventDate)
       : 0;
     inheritedDelayDays = (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart)
-      ? Math.min(totalDelay, getDaysDifference(baselineStart, prevEffectiveEnd))
+      ? getDaysDifference(baselineStart, prevEffectiveEnd)
       : 0;
-    newDelayFormed = Math.max(0, totalDelay - inheritedDelayDays);
-    revisedTarget = (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart)
-      ? prevEffectiveEnd
-      : (baselineStart || '');
+    totalDelay = inheritedDelayDays + newDelayFormed;
+    revisedTarget = targetStart || baselineStart || '';
   } else {
-    // For Material Receipt, baseline target is expectedDate or baselineEnd
-    const effectiveTargetEnd = isMaterialStage && expectedDate ? expectedDate : baselineEnd;
-    totalDelay = (effectiveTargetEnd && eventDate > effectiveTargetEnd)
-      ? getDaysDifference(effectiveTargetEnd, eventDate)
-      : (baselineEnd && eventDate > baselineEnd)
-      ? getDaysDifference(baselineEnd, eventDate)
+    const effectiveStart = currentMilestone.actualStartDate || (prevEffectiveEnd || baselineStart);
+    const targetEnd = currentMilestone.forecastEndDate || (effectiveStart ? addDays(effectiveStart, dur) : baselineEnd);
+    newDelayFormed = (targetEnd && eventDate && eventDate > targetEnd)
+      ? getDaysDifference(targetEnd, eventDate)
       : 0;
-    const effectiveStart = milestone.actualStartDate || orderedDate || ((baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart) ? prevEffectiveEnd : baselineStart);
-    const startDelay = (baselineStart && effectiveStart && effectiveStart > baselineStart)
-      ? getDaysDifference(baselineStart, effectiveStart)
+    inheritedDelayDays = (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart)
+      ? getDaysDifference(baselineStart, prevEffectiveEnd)
       : 0;
-    inheritedDelayDays = Math.min(totalDelay, startDelay);
-    newDelayFormed = Math.max(0, totalDelay - inheritedDelayDays);
-
-    revisedTarget = startDelay > 0 && effectiveStart ? addDays(effectiveStart, baselineDuration) : (effectiveTargetEnd || baselineEnd || '');
+    totalDelay = inheritedDelayDays + newDelayFormed;
+    revisedTarget = targetEnd || baselineEnd || '';
   }
-
-  const targetRevisedStart = milestone.actualStartDate || orderedDate || ((baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart) ? prevEffectiveEnd : (baselineStart || ''));
-  const precedingStartDelay = (baselineStart && targetRevisedStart && targetRevisedStart > baselineStart)
-    ? getDaysDifference(baselineStart, targetRevisedStart)
-    : 0;
-  const targetRevisedEnd = precedingStartDelay > 0 && targetRevisedStart
-    ? addDays(targetRevisedStart, baselineDuration)
-    : (baselineEnd || '');
 
   const isBackdated = eventDate < todayStr;
 
@@ -146,10 +177,8 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
     if (!isRoleAuthorized) {
       setErrorMessage(`Unauthorized: Your active role (${activeRole}) is not permitted to complete milestone '${milestone.name}'. Exclusive access is restricted to its respective role.`);
       return;
-    }
-
-    if (!isPreviousDone) {
-      setErrorMessage(`Milestone Locked: Milestone '${previousMs?.name}' must be marked completed first before '${milestone.name}' can be updated.`);
+    }    if (!isPreviousDone) {
+      setErrorMessage(`Milestone Locked: Milestone '${previousMs?.name}' must be marked completed first before '${currentMilestone.name}' can be updated.`);
       return;
     }
 
@@ -170,7 +199,7 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
       return;
     }
 
-    if (milestone.key === 'design_approval' && eventType === 'complete' && !approvalRef.trim()) {
+    if (currentMilestone.key === 'design_approval' && eventType === 'complete' && !approvalRef.trim()) {
       setErrorMessage('Customer Drawing Approval Reference is mandatory for completing Design Stage.');
       return;
     }
@@ -185,9 +214,9 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
       : undefined;
 
     const res = updateMilestoneEvent({
-      poId: po.id,
-      productLineId: productLine.id,
-      milestoneKey: milestone.key,
+      poId: currentPo.id,
+      productLineId: currentProductLine.id,
+      milestoneKey: currentMilestone.key,
       eventType,
       eventDate,
       user: `${activeRole} User`,
@@ -212,28 +241,28 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-      <div className="bg-white border border-slate-200 rounded-xl w-full max-w-lg shadow-2xl overflow-hidden text-slate-800">
+      <div className="bg-white border border-slate-200 rounded-xl w-full max-w-lg max-h-[92vh] flex flex-col shadow-2xl overflow-hidden text-slate-800">
         
         {/* Header */}
-        <div className="bg-slate-50 px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+        <div className="bg-slate-50 px-6 py-4 border-b border-slate-200 flex items-center justify-between shrink-0">
           <div>
             <div className="flex items-center gap-2">
               <span className="font-bold text-slate-900 text-base">
-                {eventType === 'start' && milestone.actualStartDate 
+                {eventType === 'start' && currentMilestone.actualStartDate 
                   ? 'Edit / Re-enter Stage Start Date' 
                   : eventType === 'start' 
                   ? 'Record Stage Start Date' 
                   : 'Record Stage Completion'}
               </span>
-              <span className={`px-2 py-0.5 rounded-full font-mono text-[10px] font-bold border ${
-                eventType === 'start' && milestone.actualStartDate 
+              <span className={`px-2.5 py-0.5 rounded-full font-mono text-[10px] font-bold border ${
+                eventType === 'start' && currentMilestone.actualStartDate 
                   ? 'bg-blue-100 text-blue-800 border-blue-300'
                   : 'bg-emerald-100 text-emerald-800 border-emerald-300'
               }`}>
-                {eventType === 'start' && milestone.actualStartDate ? 'EDIT START' : eventType.toUpperCase()}
+                {eventType === 'start' && currentMilestone.actualStartDate ? 'EDIT START' : eventType.toUpperCase()}
               </span>
             </div>
-            <p className="text-xs text-slate-500 mt-0.5">PO: {po.poNumber} | Line: {productLine.lineNumber}</p>
+            <p className="text-xs text-slate-500 mt-0.5">PO: {currentPo.poNumber} | Line: {currentProductLine.lineNumber}</p>
           </div>
           <button onClick={onClose} className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors cursor-pointer">
             <X className="w-5 h-5" />
@@ -241,7 +270,8 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
         </div>
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs">
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto min-h-0 flex flex-col justify-between">
+          <div className="p-6 space-y-4 text-xs flex-1">
           
           {!isRoleAuthorized && (
             <div className="p-3.5 bg-amber-50 border border-amber-300 text-amber-900 rounded-lg flex items-start gap-2.5 text-xs">
@@ -249,7 +279,7 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
               <div>
                 <span className="font-bold">Role Access Restricted:</span>
                 <p className="mt-0.5">
-                  Milestone <strong className="text-slate-900">'{milestone.name}'</strong> belongs to its dedicated department role. Your active role (<span className="font-bold text-amber-950">{activeRole}</span>) cannot modify or complete this stage.
+                  Milestone <strong className="text-slate-900">'{currentMilestone.name}'</strong> belongs to its dedicated department role. Your active role (<span className="font-bold text-amber-950">{activeRole}</span>) cannot modify or complete this stage.
                 </p>
               </div>
             </div>
@@ -267,7 +297,7 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
 
           <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs">
             <div className="flex items-center justify-between">
-              <div className="font-bold text-slate-900">{milestone.name}</div>
+              <div className="font-bold text-slate-900">{currentMilestone.name}</div>
               <span className="font-mono text-[10px] font-bold text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200">
                 {baselineDuration} days planned
               </span>
@@ -308,13 +338,18 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
                     <label className="block text-[11px] font-bold text-slate-700">
                       Material Order Placement Date
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => handleOrderDateChange(todayStr)}
-                      className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer"
-                    >
-                      Today
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono text-slate-500">
+                        Plan: {baselineStart} | Rev: {targetRevisedStart}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleOrderDateChange(todayStr)}
+                        className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer"
+                      >
+                        Today
+                      </button>
+                    </div>
                   </div>
                   <input
                     type="date"
@@ -328,17 +363,19 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block text-[11px] font-bold text-slate-700">
-                      Expected Delivery Date (Calculated)
+                      Expected Delivery Date (Crossing Line)
                     </label>
-                    <span className="text-[10px] font-mono text-slate-500">+{matLeadTime}d Lead</span>
+                    <span className="text-[10px] font-mono text-slate-500">
+                      Plan: {baselineEnd} | Rev: {targetRevisedEnd}
+                    </span>
                   </div>
                   <input
                     type="date"
                     value={expectedDate}
                     onChange={(e) => setExpectedDate(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-medium focus:outline-none focus:border-emerald-600"
+                    className="w-full px-3 py-1.5 bg-white border border-emerald-400 rounded-lg text-xs font-mono font-bold text-emerald-950 focus:outline-none focus:border-emerald-600"
                   />
-                  <p className="text-[10px] text-slate-500 mt-0.5">Target arrival date as per lead time</p>
+                  <p className="text-[10px] text-emerald-800 font-medium mt-0.5">Crossing line for receipt delay (+{matLeadTime}d Lead)</p>
                 </div>
               </div>
             </div>
@@ -354,15 +391,14 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
                   ? (milestone.actualStartDate ? 'Re-enter Start Date' : 'Actual Start Date') 
                   : 'Actual Completion Date'} <span className="text-rose-600">*</span>
               </label>
-              {isMaterialStage && eventType === 'complete' ? (
-                <span className="text-[10px] text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded font-mono font-bold">
-                  Default: {expectedDate || defaultExpectedDate} (Changeable)
+              <div className="flex items-center gap-2 text-[10px] font-mono">
+                <span className="text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                  Planned: <strong>{eventType === 'start' ? baselineStart : baselineEnd}</strong>
                 </span>
-              ) : eventType === 'start' && milestone.actualStartDate ? (
-                <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded font-mono">
-                  Current: {milestone.actualStartDate}
+                <span className={precedingStartDelay > 0 ? "text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-bold" : "text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 font-bold"}>
+                  Revised: <strong>{eventType === 'start' ? targetRevisedStart : targetRevisedEnd}</strong>
                 </span>
-              ) : null}
+              </div>
             </div>
             <input
               type="date"
@@ -570,8 +606,10 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
             </div>
           )}
 
+          </div>
+
           {/* Footer Actions */}
-          <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+          <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
             <div className="text-[10px] text-slate-500 flex items-center gap-1 font-mono">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-700" />
               <span>Logged by: {activeRole} User</span>
