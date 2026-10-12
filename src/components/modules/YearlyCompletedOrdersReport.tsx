@@ -44,6 +44,24 @@ interface ManufacturingStageDef {
   responsibleRole: Role;
 }
 
+// Shared shape for per-stage delay aggregation (empty state, real state, and all consumers).
+interface StageDelayStat {
+  stageKey: string;
+  stageName: string;
+  stageOrder: number;
+  category: string;
+  responsibleRole: Role;
+  totalDays: number;
+  orders: number;
+  reasons: string[];
+  impactedPOs: Array<{
+    poNumber: string;
+    customerName: string;
+    delayDays: number;
+    reason?: string;
+  }>;
+}
+
 const CIRCOR_STANDARD_STAGES: ManufacturingStageDef[] = [
   {
     key: 'po_from_customer',
@@ -173,6 +191,32 @@ const CIRCOR_STANDARD_STAGES: ManufacturingStageDef[] = [
   }
 ];
 
+// Small ▲/▼ chip comparing the selected year against the previous year
+const DeltaChip: React.FC<{
+  current: number;
+  previous: number | null;
+  unit: string;
+  goodDirection: 'up' | 'down';
+  prevYear: number;
+  money?: boolean;
+}> = ({ current, previous, unit, goodDirection, prevYear, money }) => {
+  if (previous === null || previous === undefined) return null;
+  const diff = Math.round((current - previous) * 10) / 10;
+  if (diff === 0) {
+    return <span className="text-[10px] font-mono text-slate-400 mt-1 inline-block">→ flat vs {prevYear}</span>;
+  }
+  const isGood = goodDirection === 'up' ? diff > 0 : diff < 0;
+  const abs = Math.abs(diff);
+  const formatted = money ? `$${abs.toLocaleString()}` : `${abs}${unit}`;
+  return (
+    <span className={`text-[10px] font-mono font-bold mt-1 inline-block px-1.5 py-0.5 rounded-full border ${
+      isGood ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'
+    }`}>
+      {diff > 0 ? '▲' : '▼'} {formatted} vs {prevYear}
+    </span>
+  );
+};
+
 export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportProps> = ({ onSelectPO }) => {
   const { purchaseOrders } = useApp();
 
@@ -231,6 +275,127 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
     return Math.max(0, summary.delayDays, contractDiff);
   };
 
+  // Days of mid-flow delay that were absorbed/recovered before final delivery
+  // (same per-milestone rule as MilestoneModuleView / DeliveryDispatchModule)
+  const getPORecoveredDays = (po: PurchaseOrder): number => {
+    let recovered = 0;
+    for (const line of po.productLines || []) {
+      const sorted = [...(line.milestones || [])].sort((a, b) => a.stageOrder - b.stageOrder);
+      for (let i = 0; i < sorted.length; i++) {
+        const ms = sorted[i];
+        const isDone = ms.status === 'Completed' || Boolean(ms.actualEndDate);
+        if (!isDone) continue;
+        const varOf = (m: typeof ms) => Math.max(0, typeof m.varianceDays === 'number' ? m.varianceDays : 0);
+        const currVar = varOf(ms);
+        const prevVar = i > 0 ? varOf(sorted[i - 1]) : 0;
+        recovered += Math.max(0, prevVar - currVar);
+      }
+    }
+    return recovered;
+  };
+
+  // Helper to extract the primary bottleneck stage for an order (strictly dynamic from actual system records)
+  const getPOBottleneckInfo = (po: PurchaseOrder) => {
+    const effDelay = getPOEffectiveDelay(po);
+    const recDays = getPORecoveredDays(po);
+    const summary = getPOManufacturingStatus(po);
+
+    // If the order has NO net delay and NO recovered delay (e.g. PO-QE-8802):
+    // It was strictly on schedule; no delay occurred or was recorded anywhere.
+    if (effDelay <= 0 && recDays <= 0) {
+      return {
+        stageName: '—',
+        delayDays: 0,
+        hasBottleneck: false,
+        isDelayed: false,
+        isResolved: false
+      };
+    }
+
+    // For orders that experienced delay or recovered delay, find the actual causing stage from system milestones
+    let bottleneckStage: string | null = null;
+    let maxDelta = 0;
+    let maxVar = 0;
+    let stageReason: string | undefined = undefined;
+
+    (po.productLines || []).forEach(line => {
+      const sorted = [...(line.milestones || [])].sort((a, b) => a.stageOrder - b.stageOrder);
+      for (let i = 0; i < sorted.length; i++) {
+        const ms = sorted[i];
+        const prev = i > 0 ? sorted[i - 1] : null;
+        const v = typeof ms.varianceDays === 'number' && ms.varianceDays > 0 ? ms.varianceDays : 0;
+        const prevV = prev && typeof prev.varianceDays === 'number' && prev.varianceDays > 0 ? prev.varianceDays : 0;
+        const delta = Math.max(0, v - prevV);
+        const reason = (ms.delayReason && !ms.delayReason.startsWith('Inherited') && !ms.delayReason.startsWith('Cascaded'))
+          ? ms.delayReason
+          : undefined;
+
+        if (delta > maxDelta) {
+          maxDelta = delta;
+          maxVar = v;
+          bottleneckStage = ms.name;
+          stageReason = reason;
+        } else if (delta === maxDelta && v > maxVar) {
+          maxVar = v;
+          bottleneckStage = ms.name;
+          if (reason) stageReason = reason;
+        } else if (!bottleneckStage && (v > 0 || reason)) {
+          bottleneckStage = ms.name;
+          stageReason = reason;
+        }
+      }
+    });
+
+    // Fallback to summary.delayedStageName if available
+    if (!bottleneckStage && summary.delayedStageName && summary.delayedStageName !== '14. Final Shipment & Dispatch') {
+      bottleneckStage = summary.delayedStageName;
+      stageReason = summary.delayReason;
+    }
+
+    if (!bottleneckStage && effDelay > 0) {
+      bottleneckStage = '14. Final Shipment & Dispatch';
+    }
+
+    // Normalize to standard stage name if matched
+    if (bottleneckStage) {
+      const matched = CIRCOR_STANDARD_STAGES.find(s =>
+        bottleneckStage?.toLowerCase().includes(s.name.toLowerCase()) ||
+        bottleneckStage?.toLowerCase().includes(s.key.toLowerCase()) ||
+        s.name.toLowerCase().includes(bottleneckStage?.toLowerCase() || '')
+      );
+      if (matched) bottleneckStage = matched.name;
+    }
+
+    const delayDays = effDelay > 0 ? effDelay : (maxDelta > 0 ? maxDelta : (maxVar > 0 ? maxVar : recDays));
+
+    return {
+      stageName: bottleneckStage || '7. Material Receipt (GRN)',
+      delayDays: delayDays || 1,
+      reason: stageReason,
+      hasBottleneck: true,
+      isDelayed: effDelay > 0,
+      isResolved: effDelay <= 0 && recDays > 0
+    };
+  };
+
+  // Lightweight per-order-set stats used for the YoY trend + delta chips
+  // (OTIF / avg-delay use the same definitions as the main metrics)
+  const computeSimpleStats = (orders: PurchaseOrder[]) => {
+    let booked = 0, onTime = 0, delayed = 0, delaySum = 0;
+    orders.forEach(po => {
+      booked += typeof po.bookedAmount === 'number' && !isNaN(po.bookedAmount) ? po.bookedAmount : 0;
+      const d = getPOEffectiveDelay(po);
+      delaySum += d;
+      if (d <= 0) onTime++; else delayed++;
+    });
+    return {
+      totalOrders: orders.length,
+      totalBooked: booked,
+      otif: orders.length > 0 ? Math.round((onTime / orders.length) * 100) : 100,
+      avgDelay: delayed > 0 ? Math.round((delaySum / delayed) * 10) / 10 : 0
+    };
+  };
+
   // Distinct years present in data
   const availableYears = useMemo(() => {
     const yearSet = new Set<number>();
@@ -252,6 +417,40 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
     return completedOrders.filter(po => getCompletionYear(po) === selectedYear);
   }, [completedOrders, selectedYear]);
 
+  // Year-over-Year trend stats (chronological)
+  const yearlyStats = useMemo(() => {
+    return [...availableYears].sort((a, b) => a - b).map(year => ({
+      year,
+      ...computeSimpleStats(completedOrders.filter(po => getCompletionYear(po) === year))
+    }));
+  }, [completedOrders, availableYears]);
+
+  // Previous-year stats for KPI delta chips (availableYears is sorted desc → next entry is the prior year)
+  const prevYearStats = useMemo(() => {
+    if (selectedYear === 'ALL') return null;
+    const prevYear = availableYears[availableYears.indexOf(selectedYear) + 1];
+    if (prevYear === undefined) return null;
+    return { year: prevYear, ...computeSimpleStats(completedOrders.filter(po => getCompletionYear(po) === prevYear)) };
+  }, [selectedYear, availableYears, completedOrders]);
+
+  // Booked value delivered late in the current scope (for the verdict banner)
+  const lateBookedValue = useMemo(() => yearOrders.reduce((sum, po) => {
+    const amt = typeof po.bookedAmount === 'number' && !isNaN(po.bookedAmount) ? po.bookedAmount : 0;
+    return sum + (getPOEffectiveDelay(po) > 0 ? amt : 0);
+  }, 0), [yearOrders]);
+
+  // On-time orders that had mid-flow delays which were resolved before delivery
+  const recoveredStats = useMemo(() => {
+    let count = 0;
+    let days = 0;
+    yearOrders.forEach(po => {
+      if (getPOEffectiveDelay(po) > 0) return;
+      const rec = getPORecoveredDays(po);
+      if (rec > 0) { count++; days += rec; }
+    });
+    return { count, days };
+  }, [yearOrders]);
+
   // Executive metrics calculation
   const metrics = useMemo(() => {
     const totalOrders = yearOrders.length;
@@ -272,7 +471,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
         productionDelayDays: 0,
         customerDelayDays: 0,
         engineeringDelayDays: 0,
-        stageDelayMap: {} as Record<string, { totalDays: number; orders: number }>
+        stageDelayMap: {} as Record<string, StageDelayStat>
       };
     }
 
@@ -480,7 +679,10 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
       }
     });
 
-    const totalCalculatedDelays = Math.max(totalDelaySum, 1);
+    // Shares must be percentages of the stage-attributed delay days (not the PO-level net delay),
+    // so the bottleneck shares always sum to ~100%.
+    const stageDaysSum = Object.values(stageDelayMap).reduce((sum, s) => sum + s.totalDays, 0);
+    const totalCalculatedDelays = Math.max(stageDaysSum, 1);
 
     const topBottlenecks: StageBottleneckItem[] = Object.values(stageDelayMap)
       .filter(s => s.totalDays > 0)
@@ -502,7 +704,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
       onTimeCount,
       delayedCount,
       otifRate: totalOrders > 0 ? Math.round((onTimeCount / totalOrders) * 100) : 100,
-      avgDelay: totalOrders > 0 ? Math.round((totalDelaySum / totalOrders) * 10) / 10 : 0,
+      avgDelay: delayedCount > 0 ? Math.round((totalDelaySum / delayedCount) * 10) / 10 : 0,
       maxDelay,
       totalDelayDays: totalDelaySum,
       totalUnits,
@@ -530,35 +732,21 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
   // Top 4 delayed stages stats ranked by max repeated delays (frequency of delay across orders)
   const delayedStagesStats = useMemo(() => {
     const allDelayed = CIRCOR_STANDARD_STAGES.map(item => {
-      const stat = (metrics.stageDelayMap && (metrics.stageDelayMap as any)[item.key]) || {
-        totalDays: 0,
-        orders: 0,
-        reasons: []
-      };
-
-      // Check for an explicit meaningful delay reason, filtering out non-descriptive filler strings (e.g. 'A', 'B', 'Completed on schedule')
-      const rawReasons: string[] = stat.reasons || [];
-      const validCustomReason = rawReasons.find((r: string) => {
-        if (!r || typeof r !== 'string') return false;
-        const cleaned = r.trim().toLowerCase();
-        if (cleaned.length <= 3) return false;
-        if (['completed on schedule', 'completed', 'none', 'ok', 'n/a', 'na', 'done', 'on track'].includes(cleaned)) return false;
-        return true;
-      });
-
-      const primaryDelayCause = validCustomReason || item.primaryCause;
+      const stat = metrics.stageDelayMap[item.key];
 
       return {
         key: item.key,
         order: item.order,
         name: item.name,
         category: item.category,
-        primaryDelayCause,
+        // Generic per-stage cause from the standard catalog (intentionally NOT a single
+        // order's recorded reason — this is a standard annual report, not an order log).
+        primaryDelayCause: item.primaryCause,
         improvementTip: item.improvementTip,
         responsibleRole: item.responsibleRole,
-        delayDays: stat.totalDays,
-        ordersCount: stat.orders,
-        isDelayed: stat.totalDays > 0,
+        delayDays: stat?.totalDays || 0,
+        ordersCount: stat?.orders || 0,
+        isDelayed: (stat?.totalDays || 0) > 0,
       };
     })
     .filter(stage => stage.isDelayed)
@@ -569,12 +757,11 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
       return a.order - b.order;
     });
 
-    // Always show top 4 only
-    const top4 = allDelayed.slice(0, 4);
-
-    if (!stageSearch.trim()) return top4;
+    // Default view: top 4 by delay frequency. When searching, search ALL delayed
+    // stages (not just the top 4) so a ranked-#5 stage is still findable.
+    if (!stageSearch.trim()) return allDelayed.slice(0, 4);
     const q = stageSearch.toLowerCase();
-    return top4.filter(stage => (
+    return allDelayed.filter(stage => (
       stage.name.toLowerCase().includes(q) ||
       stage.primaryDelayCause.toLowerCase().includes(q) ||
       stage.improvementTip.toLowerCase().includes(q) ||
@@ -584,10 +771,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
   }, [metrics.stageDelayMap, stageSearch]);
 
   const delayedStagesCount = useMemo(() => {
-    return CIRCOR_STANDARD_STAGES.filter(item => {
-      const stat = (metrics.stageDelayMap && (metrics.stageDelayMap as any)[item.key]) || { totalDays: 0, orders: 0 };
-      return stat.totalDays > 0;
-    }).length;
+    return CIRCOR_STANDARD_STAGES.filter(item => (metrics.stageDelayMap[item.key]?.totalDays || 0) > 0).length;
   }, [metrics.stageDelayMap]);
 
   // Filtered orders list for the table
@@ -603,21 +787,26 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
         const matchPO = po.poNumber.toLowerCase().includes(q);
         const matchCust = po.customerName.toLowerCase().includes(q);
         const matchProd = po.productLines.some(l => l.productName.toLowerCase().includes(q));
-        return matchPO || matchCust || matchProd;
+        const bInfo = getPOBottleneckInfo(po);
+        const matchBottleneck = bInfo.hasBottleneck && bInfo.stageName.toLowerCase().includes(q);
+        return matchPO || matchCust || matchProd || matchBottleneck;
       }
 
       return true;
     });
   }, [yearOrders, statusFilter, searchQuery]);
 
-  // Export CSV
+  // Export CSV (respects the currently visible filters — status + search)
   const handleExportCSV = () => {
-    if (yearOrders.length === 0) return;
+    if (filteredOrders.length === 0) return;
     const headers = ['PO Number', 'Customer', 'Product', 'Booked Amount ($)', 'PO Date', 'Delivered Date', 'Variance (Days)', 'Status', 'Bottleneck Stage'];
-    const rows = yearOrders.map(po => {
-      const s = getPOManufacturingStatus(po);
+    const rows = filteredOrders.map(po => {
       const line = po.productLines[0];
       const effDelay = getPOEffectiveDelay(po);
+      const bInfo = getPOBottleneckInfo(po);
+      const bottleneckExport = bInfo.hasBottleneck
+        ? `${bInfo.stageName}${bInfo.isDelayed ? ` (+${bInfo.delayDays}d)` : ''}`
+        : 'None';
       return [
         `"${po.poNumber}"`,
         `"${po.customerName.replace(/"/g, '""')}"`,
@@ -627,7 +816,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
         `"${getCompletionDate(po)}"`,
         effDelay,
         effDelay > 0 ? '"Delayed"' : '"On-Time"',
-        `"${(s.delayedStageName || 'None').replace(/"/g, '""')}"`
+        `"${bottleneckExport.replace(/"/g, '""')}"`
       ].join(',');
     });
     const blob = new Blob(['\uFEFF' + [headers.join(','), ...rows].join('\n')], { type: 'text/csv;charset=utf-8;' });
@@ -783,6 +972,35 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
         </div>
       </div>
 
+      {/* ===== EXECUTIVE VERDICT BANNER (one-glance summary for the selected scope) ===== */}
+      {metrics.totalOrders > 0 && (
+        <div className={`rounded-2xl border p-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs ${
+          metrics.otifRate >= 85 ? 'bg-emerald-50 border-emerald-200' :
+          metrics.otifRate >= 60 ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-200'
+        }`}>
+          <span className="font-black text-sm text-slate-900">
+            {selectedYear === 'ALL' ? 'All Years' : selectedYear} Verdict
+          </span>
+          <span className="text-slate-600">
+            OTIF <strong className={`font-mono ${metrics.otifRate >= 85 ? 'text-emerald-700' : metrics.otifRate >= 60 ? 'text-amber-700' : 'text-rose-700'}`}>{metrics.otifRate}%</strong>
+            <span className="text-slate-400"> (target 85%)</span>
+          </span>
+          <span className="text-slate-600">
+            Delay: <strong className="font-mono text-rose-700">+{metrics.totalDelayDays}d</strong> across {metrics.delayedCount} late {metrics.delayedCount === 1 ? 'order' : 'orders'}
+          </span>
+          <span className="text-slate-600">
+            Top bottleneck: <strong className="text-slate-900">{metrics.topBottlenecks[0]?.stageName || 'None'}</strong>
+            {metrics.topBottlenecks[0] && <span className="font-mono text-rose-700"> (+{metrics.topBottlenecks[0].totalDelayDays}d, {metrics.topBottlenecks[0].sharePct}%)</span>}
+          </span>
+          {lateBookedValue > 0 && (
+            <span className="text-slate-600">
+              Late value: <strong className="font-mono text-rose-700">${lateBookedValue.toLocaleString()}</strong>
+              <span className="text-slate-400"> of ${metrics.totalBookedAmount.toLocaleString()} booked</span>
+            </span>
+          )}
+        </div>
+      )}
+
       {/* ============================================================== */}
       {/* SECTION 1: DELIVERY PERFORMANCE & VISUAL ANALYTICS             */}
       {/* ============================================================== */}
@@ -824,6 +1042,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
           <div className="text-3xl font-black text-slate-900 font-mono">
             {metrics.totalOrders}
           </div>
+          {prevYearStats && <DeltaChip current={metrics.totalOrders} previous={prevYearStats.totalOrders} unit="" goodDirection="up" prevYear={prevYearStats.year} />}
           <div className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-100 flex items-center justify-between">
             <span>Delivered Volume:</span>
             <strong className="text-slate-800 font-mono">{metrics.totalUnits} Units</strong>
@@ -841,6 +1060,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
               ? `$${metrics.totalBookedAmount.toLocaleString()}` 
               : '—'}
           </div>
+          {prevYearStats && <DeltaChip current={metrics.totalBookedAmount} previous={prevYearStats.totalBooked} unit="" goodDirection="up" prevYear={prevYearStats.year} money />}
           <div className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-100 flex items-center justify-between">
             <span>Average / Order:</span>
             <strong className="text-slate-800 font-mono">
@@ -861,10 +1081,13 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
           }`}>
             {metrics.otifRate}%
           </div>
+          {prevYearStats && <DeltaChip current={metrics.otifRate} previous={prevYearStats.otif} unit=" pts" goodDirection="up" prevYear={prevYearStats.year} />}
           <div className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-100 flex items-center justify-between">
             <span>On-Time vs Late:</span>
             <span className="font-mono">
-              <strong className="text-emerald-700">{metrics.onTimeCount}</strong> On-Time • <strong className="text-rose-600">{metrics.delayedCount}</strong> Late
+              <strong className="text-emerald-700">{metrics.onTimeCount}</strong> On-Time
+              {recoveredStats.count > 0 && <span className="text-emerald-600/80"> ({recoveredStats.count} recovered)</span>}
+              {' '}• <strong className="text-rose-600">{metrics.delayedCount}</strong> Late
             </span>
           </div>
         </div>
@@ -872,12 +1095,13 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
         {/* Average Order Delay */}
         <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
           <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase font-mono mb-2">
-            <span>Average Order Delay</span>
+            <span>Avg Delay (Late Orders)</span>
             <Clock className="w-4 h-4 text-amber-600" />
           </div>
           <div className="text-3xl font-black text-amber-700 font-mono">
             +{metrics.avgDelay}d
           </div>
+          {prevYearStats && <DeltaChip current={metrics.avgDelay} previous={prevYearStats.avgDelay} unit="d" goodDirection="down" prevYear={prevYearStats.year} />}
           <div className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-100 flex items-center justify-between">
             <span>Maximum Single Delay:</span>
             <strong className="text-rose-700 font-mono">+{metrics.maxDelay}d</strong>
@@ -885,6 +1109,51 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
         </div>
 
       </div>
+
+      {/* YEAR-OVER-YEAR TREND TABLE (click a year row to focus the report on it) */}
+      {yearlyStats.length >= 1 && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
+          <div>
+            <h3 className="font-extrabold text-sm text-slate-900">Year-over-Year Trend</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Completion-year performance across all history — click a row to focus the report on that year</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-slate-400 font-mono text-[10px] uppercase border-b border-slate-100">
+                  <th className="py-2 pr-4">Year</th>
+                  <th className="py-2 pr-4">Orders</th>
+                  <th className="py-2 pr-4">Booked Value</th>
+                  <th className="py-2 pr-4">OTIF</th>
+                  <th className="py-2">Avg Delay (Late)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {yearlyStats.map(ys => {
+                  const isSel = selectedYear === ys.year;
+                  const otifColor = ys.otif >= 85 ? 'text-emerald-700' : ys.otif >= 60 ? 'text-amber-700' : 'text-rose-700';
+                  return (
+                    <tr
+                      key={ys.year}
+                      onClick={() => setSelectedYear(isSel ? 'ALL' : ys.year)}
+                      className={`cursor-pointer hover:bg-slate-50 ${isSel ? 'bg-emerald-50/60' : ''}`}
+                    >
+                      <td className="py-2 pr-4 font-bold text-slate-900 font-mono">{ys.year}</td>
+                      <td className="py-2 pr-4 font-mono text-slate-700">{ys.totalOrders}</td>
+                      <td className="py-2 pr-4 font-mono text-slate-700">${ys.totalBooked.toLocaleString()}</td>
+                      <td className={`py-2 pr-4 font-mono font-bold ${otifColor}`}>{ys.otif}%</td>
+                      <td className="py-2 font-mono text-slate-700">+{ys.avgDelay}d</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {selectedYear !== 'ALL' && (
+            <p className="text-[10px] text-slate-400">Focused on {selectedYear} — click the row again to reset to All Years.</p>
+          )}
+        </div>
+      )}
 
       {/* ============================================================== */}
       {/* SECTION: VISUAL GRAPHS (Clean, Focused, Not Overwhelming)     */}
@@ -902,7 +1171,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
                 </h3>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Total delay days added at each stage across completed contracts
+                Ranked by <strong className="text-slate-700">total delay days</strong> added at each stage across completed contracts
               </p>
             </div>
             <div className="text-xs font-mono font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-1 rounded-lg">
@@ -1032,7 +1301,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
             <div className="mt-4 flex items-center gap-4 text-xs font-mono">
               <div className="flex items-center gap-1.5">
                 <span className="w-3 h-3 rounded-full bg-emerald-600"></span>
-                <span className="text-slate-700">On-Time ({metrics.onTimeCount})</span>
+                <span className="text-slate-700">On-Time ({metrics.onTimeCount}{recoveredStats.count > 0 ? `, ${recoveredStats.count} recovered` : ''})</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="w-3 h-3 rounded-full bg-rose-500"></span>
@@ -1067,7 +1336,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
                   Top 4 Stage Delays & Actionable Improvements
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Focus on the top 4 most repeated bottleneck delays across completed orders, root causes, and actionable improvements
+                  Ranked by <strong className="text-slate-700">how often</strong> a stage delayed orders (frequency, not total days), with root causes and actionable improvements
                 </p>
               </div>
             </div>
@@ -1409,12 +1678,12 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
                 </tr>
               ) : (
                 filteredOrders.map(po => {
-                  const summary = getPOManufacturingStatus(po);
                   const line = po.productLines[0];
                   const compDate = getCompletionDate(po);
                   const effDelay = getPOEffectiveDelay(po);
                   const isDelayed = effDelay > 0;
                   const booked = typeof po.bookedAmount === 'number' ? po.bookedAmount : 0;
+                  const bottleneck = getPOBottleneckInfo(po);
 
                   return (
                     <tr key={po.id} className="hover:bg-slate-50/80 transition-colors">
@@ -1445,14 +1714,29 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
                         ) : (
                           <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-full font-bold text-[10px] inline-flex items-center gap-1">
                             <CheckCheck className="w-3 h-3 text-emerald-600" /> On-Time
+                            {(() => {
+                              const rec = getPORecoveredDays(po);
+                              return rec > 0
+                                ? <span className="text-emerald-600/80 font-normal">(delay resolved +{rec}d)</span>
+                                : null;
+                            })()}
                           </span>
                         )}
                       </td>
                       <td className="py-3 px-4 text-slate-700">
-                        {isDelayed ? (
-                          <span className="font-semibold text-slate-900">
-                            {summary.delayedStageName || 'Manufacturing'}
-                          </span>
+                        {bottleneck.hasBottleneck ? (
+                          bottleneck.isDelayed ? (
+                            <span className="font-semibold text-rose-900 block leading-tight">
+                              {bottleneck.stageName}
+                              <span className="text-[10px] text-rose-600 font-normal ml-1">
+                                (+{bottleneck.delayDays}d)
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="font-semibold text-slate-900 block leading-tight">
+                              {bottleneck.stageName}
+                            </span>
+                          )
                         ) : (
                           <span className="text-slate-400 font-mono text-[11px]">—</span>
                         )}

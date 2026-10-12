@@ -900,6 +900,9 @@ export function parseAndValidateCsv(
                   ? 'Customer'
                   : 'Production';
             }
+          } else {
+            delayReason = undefined;
+            delayCategory = undefined;
           }
 
           return {

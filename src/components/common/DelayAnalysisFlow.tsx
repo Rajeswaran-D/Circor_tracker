@@ -136,38 +136,43 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
       delaySteps.push(step);
       recoverySteps.push(step);
     } 
-    // 3. Stage has an explicit user-entered delay reason or finished late historically
+    // 3. Stage finished late historically beyond planned target date or has active positive variance
     else if (
-      (Boolean(ms.delayReason) && !ms.delayReason?.startsWith('Cascaded') && !ms.delayReason?.startsWith('Inherited')) ||
-      (actualEnd && plannedEnd && actualEnd > plannedEnd)
+      (actualEnd && plannedEnd && actualEnd > plannedEnd) ||
+      (activeVariance > 0 && Boolean(ms.delayReason) && !ms.delayReason?.startsWith('Cascaded') && !ms.delayReason?.startsWith('Inherited'))
     ) {
       if (!delaySteps.some(s => s.stageKey === ms.key)) {
-        const historicalDelay = actualEnd && plannedEnd && actualEnd > plannedEnd ? getDaysDifference(plannedEnd, actualEnd) : Math.max(1, activeVariance);
-        const step: DelayStep = {
-          stageOrder: ms.stageOrder,
-          stageName: ms.name,
-          stageKey: ms.key,
-          varianceDays: activeVariance,
-          delayDays: historicalDelay,
-          stageDelayAdded: historicalDelay,
-          cumulativeDelay: activeVariance,
-          stageDelta: historicalDelay,
-          isRootCause: false,
-          isRecovery: false,
-          isAdditionalDelay: true,
-          delayCategory: ms.delayCategory,
-          delayReason: (ms.delayReason && ms.delayReason.trim()) ? ms.delayReason.trim() : ms.name,
-          plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
-          actualDates: { start: actualStart, end: actualEnd, duration: actualDuration },
-          productLineName: line.productName,
-          lineNumber: line.lineNumber,
-          productLineId: line.id,
-          affectedProducts: [{ lineId: line.id, lineNumber: line.lineNumber, productName: line.productName, varianceDays: activeVariance, delayReason: (ms.delayReason && ms.delayReason.trim()) ? ms.delayReason.trim() : ms.name }]
-        };
+        const historicalDelay = (actualEnd && plannedEnd && actualEnd > plannedEnd)
+          ? getDaysDifference(plannedEnd, actualEnd)
+          : activeVariance;
 
-        delaySteps.push(step);
-        if (historicalDelay > 0 && totalDaysDelayed === 0) {
-          totalDaysDelayed += historicalDelay;
+        if (historicalDelay > 0) {
+          const step: DelayStep = {
+            stageOrder: ms.stageOrder,
+            stageName: ms.name,
+            stageKey: ms.key,
+            varianceDays: activeVariance,
+            delayDays: historicalDelay,
+            stageDelayAdded: historicalDelay,
+            cumulativeDelay: activeVariance,
+            stageDelta: historicalDelay,
+            isRootCause: false,
+            isRecovery: false,
+            isAdditionalDelay: true,
+            delayCategory: ms.delayCategory,
+            delayReason: (ms.delayReason && ms.delayReason.trim()) ? ms.delayReason.trim() : ms.name,
+            plannedDates: { start: plannedStart, end: plannedEnd, duration: plannedDuration },
+            actualDates: { start: actualStart, end: actualEnd, duration: actualDuration },
+            productLineName: line.productName,
+            lineNumber: line.lineNumber,
+            productLineId: line.id,
+            affectedProducts: [{ lineId: line.id, lineNumber: line.lineNumber, productName: line.productName, varianceDays: activeVariance, delayReason: (ms.delayReason && ms.delayReason.trim()) ? ms.delayReason.trim() : ms.name }]
+          };
+
+          delaySteps.push(step);
+          if (totalDaysDelayed === 0) {
+            totalDaysDelayed += historicalDelay;
+          }
         }
       }
     }

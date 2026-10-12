@@ -555,8 +555,8 @@ export function recalculateProductLine(
       : getDaysDifference(ms.committedBaselineEndDate, effEnd);
 
     let status: MilestoneStatus = ms.status;
-    let delayCategory = ms.delayCategory;
-    let delayReason = ms.delayReason && !ms.delayReason.startsWith('Inherited delay') && !ms.delayReason.startsWith('Cascaded delay')
+    let delayCategory = varianceDays > 0 ? ms.delayCategory : undefined;
+    let delayReason = (varianceDays > 0 && ms.delayReason && !ms.delayReason.startsWith('Inherited delay') && !ms.delayReason.startsWith('Cascaded delay'))
       ? ms.delayReason
       : undefined;
     let delayOwner = ms.delayOwner;

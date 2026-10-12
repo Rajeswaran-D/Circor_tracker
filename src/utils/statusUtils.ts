@@ -173,20 +173,23 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
   const isDelayed = !isOrderFinished && (totalCalculatedDelay > 0 || activeMilestoneVariance > 0);
 
   // Delayed stage name matches the actual stage where the delay originated
-  const delayedStageName = (rootDelayEntry && rootDelayEntry.varianceDays > 0)
-    ? getStageFriendlyName(rootDelayEntry.milestone.key, rootDelayEntry.line)
-    : (activeMilestone ? getStageFriendlyName(activeMilestone.key, line) : undefined);
-
   // Net delay days: preserved on finished/closed orders as well as active delayed orders
   const delayDays = isOrderFinished
     ? totalCalculatedDelay
     : (isDelayed ? Math.max(totalCalculatedDelay, activeMilestoneVariance) : 0);
 
-  const delayReason = (rootDelayEntry?.delayReason && !rootDelayEntry.delayReason.startsWith('Inherited'))
-    ? rootDelayEntry.delayReason
-    : (line.delayReason && !line.delayReason.startsWith('Inherited')
-      ? line.delayReason
-      : (rootDelayEntry ? rootDelayEntry.milestone.name : (delayedStageName || activeMilestone?.name)));
+  // Delayed stage name matches the actual stage where the delay originated (only if order is delayed)
+  const delayedStageName = (delayDays > 0 && rootDelayEntry && rootDelayEntry.varianceDays > 0)
+    ? getStageFriendlyName(rootDelayEntry.milestone.key, rootDelayEntry.line)
+    : (delayDays > 0 && activeMilestone ? getStageFriendlyName(activeMilestone.key, line) : undefined);
+
+  const delayReason = delayDays > 0
+    ? ((rootDelayEntry?.delayReason && !rootDelayEntry.delayReason.startsWith('Inherited'))
+        ? rootDelayEntry.delayReason
+        : (line.delayReason && !line.delayReason.startsWith('Inherited')
+          ? line.delayReason
+          : (rootDelayEntry ? rootDelayEntry.milestone.name : (delayedStageName || activeMilestone?.name))))
+    : undefined;
 
   const lastRevNum = (po.revisions && po.revisions.length > 0) ? po.revisions.length - 1 : 0;
 
