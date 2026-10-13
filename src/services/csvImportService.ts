@@ -571,8 +571,8 @@ export function parseAndValidateCsv(
       ...(s.stage === 3 ? ['CORB Release Date', 'CORB Release Actual', 'CORB Release', 'CORB Open Points Closure', 'CORB Actual', 'CORB'] : []),
       // Stage 4: Strictly real BOM actual data — Mini-BOM is deliberately excluded so BOM milestone uses actual BOM data
       ...(s.stage === 4 ? ['BOM Release Actual', 'BOM Actual', 'BOM Release Date', 'BOM Release', 'BOM', 'Stage 4 Actual', 'Stage4 Actual', 'S4 Actual'] : []),
-      ...(s.stage === 5 ? ['Work Order Release Actual', 'WO Release Actual', 'Work Order Release', 'WO Release Date', 'WO Release', 'Work Order', 'WO Actual', 'WO'] : []),
-      ...(s.stage === 6 ? ['PO - Long Leads Actual', 'Long Lead PO Actual', 'PO - Long Leads', 'Sub-Supplier PO Actual', 'Sub Supplier PO Actual', 'PO Actual', 'Sub-Supplier PO Date', 'Sub Supplier PO Date', 'Sub-Supplier PO', 'Sub Supplier PO'] : []),
+      ...(s.stage === 5 ? ['Work Order Release Actual', 'WO Release Actual', 'Work Order Release', 'WO Release Date', 'WO Release', 'Work Order', 'WO Actual', 'WO', 'PO - Long Leads Actual', 'Long Lead PO Actual', 'PO - Long Leads'] : []),
+      ...(s.stage === 6 ? ['Sub-Supplier PO Actual', 'Sub Supplier PO Actual', 'Sub-Supplier PO Date', 'Sub Supplier PO Date', 'Sub-Supplier PO', 'Sub Supplier PO', 'PO Actual', 'PO Date', 'PO'] : []),
       ...(s.stage === 7 ? ['Material Receipts Actual', 'Material Receipt Actual', 'Material Receipt Date', 'Mat\'l receipt Actual', 'Material Receipt (GRN)', 'Material Receipt', 'Material Receipts', 'GRN Actual', 'GRN Date', 'GRN'] : []),
       ...(s.stage === 8 ? ['Machining Actual', 'Machining Date', 'Machining Complete', 'Machining'] : []),
       ...(s.stage === 9 ? ['Assembly Actual', 'Assembly Date', 'Assembly Complete', 'Assembly'] : []),
@@ -591,13 +591,13 @@ export function parseAndValidateCsv(
       `Stage_${s.stage}_Target`,
       `Stage${s.stage}_Target`,
       `${s.key}_planned`,
-      ...(s.stage === 1 ? ['S1_CustomerPO_Planned', 'Customer PO Planned', 'PO Planned', 'Customer PO Date', 'PO Date'] : []),
+      ...(s.stage === 1 ? ['S1_CustomerPO_Planned', 'Customer PO Planned', 'Customer PO Date', 'PO Date'] : []),
       ...(s.stage === 2 ? ['S2_PMBaseline_Planned', 'PM Baseline Planned', 'PM Baseline Target', 'Baseline Planned', 'PM Baseline Plan'] : []),
       ...(s.stage === 3 ? ['S3_CORB_Planned', 'CORB Release Planned', 'CORB Planned', 'CORB Plan', 'CORB Target'] : []),
       // Stage 4: Real BOM Planned date column
       ...(s.stage === 4 ? ['S4_BOMRelease_Planned', 'BOM Release Planned', 'BOM Planned', 'BOM Plan', 'BOM Target Date', 'BOM Target'] : []),
-      ...(s.stage === 5 ? ['S5_WORelease_Planned', 'Work Order Release Planned', 'WO Release Planned', 'Work Order Planned', 'WO Planned'] : []),
-      ...(s.stage === 6 ? ['S6_SubSupplierPO_Planned', 'PO - Long Leads Planned', 'Long Lead PO Planned', 'Sub-Supplier PO Planned', 'Sub Supplier PO Planned', 'PO Planned'] : []),
+      ...(s.stage === 5 ? ['S5_WORelease_Planned', 'Work Order Release Planned', 'WO Release Planned', 'Work Order Planned', 'WO Planned', 'PO - Long Leads Planned', 'Long Lead PO Planned'] : []),
+      ...(s.stage === 6 ? ['S6_SubSupplierPO_Planned', 'Sub-Supplier PO Planned', 'Sub Supplier PO Planned', 'PO Planned'] : []),
       ...(s.stage === 7 ? ['S7_MaterialReceipt_Planned', 'Material Receipts Planned', 'Material Receipt Planned', 'Mat\'l receipt Planned', 'Material Expected Date', 'S7_MaterialExpectedDate', 'GRN Planned'] : []),
       ...(s.stage === 8 ? ['S8_Machining_Planned', 'Machining Planned', 'Machining Plan', 'Machining Target'] : []),
       ...(s.stage === 9 ? ['S9_Assembly_Planned', 'Assembly Planned', 'Assembly Plan', 'Assembly Target'] : []),
@@ -614,12 +614,12 @@ export function parseAndValidateCsv(
       `Stage_${s.stage}_Delay`,
       `Stage${s.stage}_Delay`,
       `${s.key}_delay`,
-      ...(s.stage === 1 ? ['S1_CustomerPO_Delay', 'Customer PO Delay', 'PO Delay'] : []),
+      ...(s.stage === 1 ? ['S1_CustomerPO_Delay', 'Customer PO Delay'] : []),
       ...(s.stage === 2 ? ['S2_PMBaseline_Delay', 'PM Baseline Delay', 'Baseline Delay'] : []),
       ...(s.stage === 3 ? ['S3_CORB_Delay', 'Delay CORB Release', 'CORB Release Delay', 'CORB Delay', 'Clarification Delay after CORB'] : []),
       ...(s.stage === 4 ? ['S4_BOMRelease_Delay', 'BOM Delay', 'Delay in BOM', 'BOM Release Delay'] : []),
-      ...(s.stage === 5 ? ['S5_WORelease_Delay', 'Work Order Delay', 'WO Release Delay', 'WO Delay'] : []),
-      ...(s.stage === 6 ? ['S6_SubSupplierPO_Delay', 'Delay in Long lead PO', 'PO - Long Leads Delay', 'Sub-Supplier PO Delay', 'Long Lead PO Delay'] : []),
+      ...(s.stage === 5 ? ['S5_WORelease_Delay', 'Work Order Delay', 'WO Release Delay', 'WO Delay', 'Delay in Long lead PO', 'PO - Long Leads Delay', 'Long Lead PO Delay'] : []),
+      ...(s.stage === 6 ? ['S6_SubSupplierPO_Delay', 'Sub-Supplier PO Delay', 'PO Delay', 'Delay in PO'] : []),
       ...(s.stage === 7 ? ['S7_MaterialReceipt_Delay', 'Mat\'l receipt delay', 'Material Receipts Delay', 'Material Receipt Delay', 'GRN Delay'] : []),
       ...(s.stage === 8 ? ['S8_Machining_Delay', 'Machining Delay', 'Delay in Machining'] : []),
       ...(s.stage === 9 ? ['S9_Assembly_Delay', 'Assembly Delay', 'Delay in Assembly'] : []),
@@ -1008,6 +1008,7 @@ export function parseAndValidateCsv(
       // Apply historical completion dates, bridge omitted stages, and activate the real live stage
       let foundFirstPending = false;
       let runningChainDate = effectivePoDate;
+      let runningBaselineEnd = effectivePoDate;
 
       const configuredMilestones: Milestone[] = baseMilestones.map((m, mIdx) => {
         const actualEnd = rawLine.stageActualDates[m.key];
@@ -1017,10 +1018,17 @@ export function parseAndValidateCsv(
 
         // Effective planned end date for this stage (from Excel if provided, or from baseline template)
         const effectivePlannedEnd = importedPlannedEnd || m.committedBaselineEndDate;
-        let baselineStart = m.committedBaselineStartDate;
+        let baselineStart = mIdx === 0
+          ? effectivePoDate
+          : (m.committedBaselineStartDate && m.committedBaselineStartDate >= runningBaselineEnd
+              ? m.committedBaselineStartDate
+              : addDays(runningBaselineEnd, 1));
+
         if (baselineStart > effectivePlannedEnd) {
           baselineStart = effectivePlannedEnd;
         }
+        runningBaselineEnd = effectivePlannedEnd;
+
         const baselineDuration = Math.max(1, getDaysDifference(baselineStart, effectivePlannedEnd) + 1);
 
         const stageCrossingLine = (m.key === 'material_receipt' && (effectiveMatExpectedDate || importedPlannedEnd))
