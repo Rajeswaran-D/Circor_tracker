@@ -191,6 +191,17 @@ const CIRCOR_STANDARD_STAGES: ManufacturingStageDef[] = [
   }
 ];
 
+// USD Currency Formatter: standard international grouping ($10,015,000 instead of Indian commas)
+export const formatUSD = (val: number): string => {
+  if (typeof val !== 'number' || isNaN(val)) return '$0';
+  return '$' + Math.round(val).toLocaleString('en-US');
+};
+
+export const formatUSDExact = (val: number): string => {
+  if (typeof val !== 'number' || isNaN(val)) return '$0';
+  return '$' + val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
 // Small ▲/▼ chip comparing the selected year against the previous year
 const DeltaChip: React.FC<{
   current: number;
@@ -207,7 +218,7 @@ const DeltaChip: React.FC<{
   }
   const isGood = goodDirection === 'up' ? diff > 0 : diff < 0;
   const abs = Math.abs(diff);
-  const formatted = money ? `$${abs.toLocaleString()}` : `${abs}${unit}`;
+  const formatted = money ? formatUSD(abs) : `${abs}${unit}`;
   return (
     <span className={`text-[10px] font-mono font-bold mt-1 inline-block px-1.5 py-0.5 rounded-full border ${
       isGood ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'
@@ -920,12 +931,12 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
         </div>
       </div>
 
-      {/* SECTION NAVIGATOR (Quick tabs to view even a single year effortlessly) */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-2.5 shadow-xs flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-1.5 flex-wrap">
+      {/* SECTION NAVIGATOR (Clean, responsive header tabs with non-wrapping pill badge) */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-2.5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
           <button
             onClick={() => setActiveReportTab('all')}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
               activeReportTab === 'all'
                 ? 'bg-slate-900 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -936,7 +947,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
           </button>
           <button
             onClick={() => setActiveReportTab('performance')}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
               activeReportTab === 'performance'
                 ? 'bg-emerald-700 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -947,7 +958,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
           </button>
           <button
             onClick={() => setActiveReportTab('bottlenecks')}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
               activeReportTab === 'bottlenecks'
                 ? 'bg-emerald-700 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -965,7 +976,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
           </button>
           <button
             onClick={() => setActiveReportTab('orders')}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
               activeReportTab === 'orders'
                 ? 'bg-emerald-700 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -981,45 +992,84 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
           </button>
         </div>
 
-        <div className="text-xs text-slate-500 hidden md:flex items-center gap-2 pr-2">
-          <span className="font-semibold text-slate-700">
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs font-mono shrink-0 self-start md:self-auto">
+          <span className="font-bold text-slate-800">
             {selectedYear === 'ALL' ? 'All Historical Data' : `Year ${selectedYear}`}
           </span>
-          <span>•</span>
-          <span>{yearOrders.length} Completed POs</span>
-          <span>•</span>
+          <span className="text-slate-300">•</span>
+          <span className="text-slate-600">{yearOrders.length} Completed POs</span>
+          <span className="text-slate-300">•</span>
           <span className={`font-bold ${metrics.otifRate >= 80 ? 'text-emerald-700' : 'text-amber-700'}`}>
             {metrics.otifRate}% OTIF
           </span>
         </div>
       </div>
 
-      {/* ===== EXECUTIVE VERDICT BANNER (one-glance summary for the selected scope) ===== */}
+      {/* ===== EXECUTIVE VERDICT BANNER (Clean, balanced grid summary) ===== */}
       {metrics.totalOrders > 0 && (
-        <div className={`rounded-2xl border p-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs ${
-          metrics.otifRate >= 85 ? 'bg-emerald-50 border-emerald-200' :
-          metrics.otifRate >= 60 ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-200'
+        <div className={`rounded-2xl border p-4 shadow-xs space-y-3 ${
+          metrics.otifRate >= 85 ? 'bg-emerald-50/80 border-emerald-200' :
+          metrics.otifRate >= 60 ? 'bg-amber-50/80 border-amber-200' : 'bg-rose-50/80 border-rose-200'
         }`}>
-          <span className="font-black text-sm text-slate-900">
-            {selectedYear === 'ALL' ? 'All Years' : selectedYear} Verdict
-          </span>
-          <span className="text-slate-600">
-            OTIF <strong className={`font-mono ${metrics.otifRate >= 85 ? 'text-emerald-700' : metrics.otifRate >= 60 ? 'text-amber-700' : 'text-rose-700'}`}>{metrics.otifRate}%</strong>
-            <span className="text-slate-400"> (target 85%)</span>
-          </span>
-          <span className="text-slate-600">
-            Delay: <strong className="font-mono text-rose-700">+{metrics.totalDelayDays}d</strong> across {metrics.delayedCount} late {metrics.delayedCount === 1 ? 'order' : 'orders'}
-          </span>
-          <span className="text-slate-600">
-            Top bottleneck: <strong className="text-slate-900">{metrics.topBottlenecks[0]?.stageName || 'None'}</strong>
-            {metrics.topBottlenecks[0] && <span className="font-mono text-rose-700"> (+{metrics.topBottlenecks[0].totalDelayDays}d, {metrics.topBottlenecks[0].sharePct}%)</span>}
-          </span>
-          {lateBookedValue > 0 && (
-            <span className="text-slate-600">
-              Late value: <strong className="font-mono text-rose-700">${lateBookedValue.toLocaleString()}</strong>
-              <span className="text-slate-400"> of ${metrics.totalBookedAmount.toLocaleString()} booked</span>
-            </span>
-          )}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-black/5">
+            <div className="flex items-center gap-2">
+              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase font-mono tracking-wider ${
+                metrics.otifRate >= 85 ? 'bg-emerald-700 text-white' :
+                metrics.otifRate >= 60 ? 'bg-amber-700 text-white' : 'bg-rose-700 text-white'
+              }`}>
+                {selectedYear === 'ALL' ? 'All Years Verdict' : `Year ${selectedYear} Verdict`}
+              </span>
+              <span className="text-xs text-slate-600 font-medium">
+                Analysis of {metrics.totalOrders} delivered orders
+              </span>
+            </div>
+            {lateBookedValue > 0 && (
+              <div className="text-xs font-mono flex items-center gap-1.5">
+                <span className="text-slate-500">Delivered Late:</span>
+                <strong className="text-rose-700 font-bold">{formatUSD(lateBookedValue)}</strong>
+                <span className="text-slate-400 text-[11px]">of {formatUSD(metrics.totalBookedAmount)} booked</span>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            {/* Metric 1: OTIF */}
+            <div className="bg-white/90 p-3 rounded-xl border border-black/5 shadow-2xs">
+              <span className="text-[10px] uppercase font-bold text-slate-500 font-mono block">On-Time (OTIF)</span>
+              <div className="flex items-baseline gap-1.5 mt-1">
+                <span className={`text-xl font-black font-mono ${metrics.otifRate >= 85 ? 'text-emerald-700' : metrics.otifRate >= 60 ? 'text-amber-700' : 'text-rose-700'}`}>
+                  {metrics.otifRate}%
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono">(Target 85%)</span>
+              </div>
+            </div>
+
+            {/* Metric 2: Delay */}
+            <div className="bg-white/90 p-3 rounded-xl border border-black/5 shadow-2xs">
+              <span className="text-[10px] uppercase font-bold text-slate-500 font-mono block">Total Delay</span>
+              <div className="flex items-baseline gap-1.5 mt-1">
+                <span className="text-xl font-black font-mono text-rose-700">
+                  +{metrics.totalDelayDays}d
+                </span>
+                <span className="text-[10px] text-slate-500">across {metrics.delayedCount} late {metrics.delayedCount === 1 ? 'order' : 'orders'}</span>
+              </div>
+            </div>
+
+            {/* Metric 3: Top Bottleneck */}
+            <div className="bg-white/90 p-3 rounded-xl border border-black/5 shadow-2xs col-span-2">
+              <span className="text-[10px] uppercase font-bold text-slate-500 font-mono block">Primary Root Bottleneck</span>
+              <div className="flex items-center justify-between gap-2 mt-1">
+                <span className="text-xs font-bold text-slate-900 truncate">
+                  {metrics.topBottlenecks[0]?.stageName || 'None Detected'}
+                </span>
+                {metrics.topBottlenecks[0] && (
+                  <span className="font-mono text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded shrink-0">
+                    +{metrics.topBottlenecks[0].totalDelayDays}d ({metrics.topBottlenecks[0].sharePct}% delay share)
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1056,126 +1106,191 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             
             {/* Completed Orders Count */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
-          <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase font-mono mb-2">
-            <span>Completed Orders</span>
-            <Package className="w-4 h-4 text-emerald-600" />
-          </div>
-          <div className="text-3xl font-black text-slate-900 font-mono">
-            {metrics.totalOrders}
-          </div>
-          {prevYearStats && <DeltaChip current={metrics.totalOrders} previous={prevYearStats.totalOrders} unit="" goodDirection="up" prevYear={prevYearStats.year} />}
-          <div className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-100 flex items-center justify-between">
-            <span>Delivered Volume:</span>
-            <strong className="text-slate-800 font-mono">{metrics.totalUnits} Units</strong>
-          </div>
-        </div>
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[148px]">
+              <div>
+                <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase font-mono mb-1.5">
+                  <span>Completed Orders</span>
+                  <Package className="w-4 h-4 text-emerald-600" />
+                </div>
+                <div className="text-3xl font-black text-slate-900 font-mono">
+                  {metrics.totalOrders}
+                </div>
+                {prevYearStats && <DeltaChip current={metrics.totalOrders} previous={prevYearStats.totalOrders} unit="" goodDirection="up" prevYear={prevYearStats.year} />}
+              </div>
+              <div className="text-xs text-slate-500 mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between">
+                <span>Delivered Volume:</span>
+                <strong className="text-slate-800 font-mono font-bold">{metrics.totalUnits} Units</strong>
+              </div>
+            </div>
 
-        {/* Total Booked Revenue */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
-          <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase font-mono mb-2">
-            <span>Total Order Value</span>
-            <DollarSign className="w-4 h-4 text-emerald-700" />
-          </div>
-          <div className="text-3xl font-black text-slate-900 font-mono">
-            {metrics.totalBookedAmount > 0 
-              ? `$${metrics.totalBookedAmount.toLocaleString()}` 
-              : '—'}
-          </div>
-          {prevYearStats && <DeltaChip current={metrics.totalBookedAmount} previous={prevYearStats.totalBooked} unit="" goodDirection="up" prevYear={prevYearStats.year} money />}
-          <div className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-100 flex items-center justify-between">
-            <span>Average / Order:</span>
-            <strong className="text-slate-800 font-mono">
-              {metrics.avgOrderValue > 0 ? `$${metrics.avgOrderValue.toLocaleString()}` : '$0'}
-            </strong>
-          </div>
-        </div>
+            {/* Total Booked Revenue */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[148px]">
+              <div>
+                <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase font-mono mb-1.5">
+                  <span>Total Order Value</span>
+                  <DollarSign className="w-4 h-4 text-emerald-700" />
+                </div>
+                <div className="text-2xl xl:text-3xl font-black text-slate-900 font-mono tracking-tight truncate" title={`Exact: ${formatUSDExact(metrics.totalBookedAmount)}`}>
+                  {metrics.totalBookedAmount > 0 
+                    ? formatUSD(metrics.totalBookedAmount) 
+                    : '—'}
+                </div>
+                {prevYearStats && <DeltaChip current={metrics.totalBookedAmount} previous={prevYearStats.totalBooked} unit="" goodDirection="up" prevYear={prevYearStats.year} money />}
+              </div>
+              <div className="text-xs text-slate-500 mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between">
+                <span>Average / Order:</span>
+                <strong className="text-slate-800 font-mono font-bold">
+                  {metrics.avgOrderValue > 0 ? formatUSD(metrics.avgOrderValue) : '$0'}
+                </strong>
+              </div>
+            </div>
 
-        {/* On-Time Delivery Rate (OTIF) */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
-          <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase font-mono mb-2">
-            <span>On-Time Delivery Rate</span>
-            <Award className="w-4 h-4 text-emerald-600" />
-          </div>
-          <div className={`text-3xl font-black font-mono ${
-            metrics.otifRate >= 80 ? 'text-emerald-700' :
-            metrics.otifRate >= 60 ? 'text-amber-700' : 'text-rose-700'
-          }`}>
-            {metrics.otifRate}%
-          </div>
-          {prevYearStats && <DeltaChip current={metrics.otifRate} previous={prevYearStats.otif} unit=" pts" goodDirection="up" prevYear={prevYearStats.year} />}
-          <div className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-100 flex items-center justify-between">
-            <span>On-Time vs Late:</span>
-            <span className="font-mono">
-              <strong className="text-emerald-700">{metrics.onTimeCount}</strong> On-Time
-              {recoveredStats.count > 0 && <span className="text-emerald-600/80"> ({recoveredStats.count} recovered)</span>}
-              {' '}• <strong className="text-rose-600">{metrics.delayedCount}</strong> Late
-            </span>
-          </div>
-        </div>
+            {/* On-Time Delivery Rate (OTIF) */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[148px]">
+              <div>
+                <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase font-mono mb-1.5">
+                  <span>On-Time Delivery Rate</span>
+                  <Award className="w-4 h-4 text-emerald-600" />
+                </div>
+                <div className={`text-3xl font-black font-mono ${
+                  metrics.otifRate >= 80 ? 'text-emerald-700' :
+                  metrics.otifRate >= 60 ? 'text-amber-700' : 'text-rose-700'
+                }`}>
+                  {metrics.otifRate}%
+                </div>
+                {prevYearStats && <DeltaChip current={metrics.otifRate} previous={prevYearStats.otif} unit=" pts" goodDirection="up" prevYear={prevYearStats.year} />}
+              </div>
+              <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-1 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 text-[11px]">Delivery Split:</span>
+                  <div className="font-mono text-[11px] font-bold flex items-center gap-1.5">
+                    <span className="text-emerald-700">{metrics.onTimeCount} On-Time</span>
+                    <span className="text-slate-300">•</span>
+                    <span className="text-rose-600">{metrics.delayedCount} Late</span>
+                  </div>
+                </div>
+                {recoveredStats.count > 0 && (
+                  <div className="text-[10.5px] text-emerald-700 font-medium flex items-center justify-end gap-1 font-mono">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+                    <span>{recoveredStats.count} recovered schedule delay</span>
+                  </div>
+                )}
+              </div>
+            </div>
 
-        {/* Average Order Delay */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
-          <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase font-mono mb-2">
-            <span>Avg Delay (Late Orders)</span>
-            <Clock className="w-4 h-4 text-amber-600" />
-          </div>
-          <div className="text-3xl font-black text-amber-700 font-mono">
-            +{metrics.avgDelay}d
-          </div>
-          {prevYearStats && <DeltaChip current={metrics.avgDelay} previous={prevYearStats.avgDelay} unit="d" goodDirection="down" prevYear={prevYearStats.year} />}
-          <div className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-100 flex items-center justify-between">
-            <span>Maximum Single Delay:</span>
-            <strong className="text-rose-700 font-mono">+{metrics.maxDelay}d</strong>
-          </div>
-        </div>
+            {/* Average Order Delay */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[148px]">
+              <div>
+                <div className="flex items-center justify-between text-xs font-bold text-slate-500 uppercase font-mono mb-1.5">
+                  <span>Avg Delay (Late Orders)</span>
+                  <Clock className="w-4 h-4 text-amber-600" />
+                </div>
+                <div className="text-3xl font-black text-amber-700 font-mono">
+                  +{metrics.avgDelay}d
+                </div>
+                {prevYearStats && <DeltaChip current={metrics.avgDelay} previous={prevYearStats.avgDelay} unit="d" goodDirection="down" prevYear={prevYearStats.year} />}
+              </div>
+              <div className="text-xs text-slate-500 mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between">
+                <span>Maximum Delay:</span>
+                <strong className="text-rose-700 font-mono font-bold">+{metrics.maxDelay}d</strong>
+              </div>
+            </div>
 
-      </div>
-
-      {/* YEAR-OVER-YEAR TREND TABLE (click a year row to focus the report on it) */}
-      {yearlyStats.length >= 1 && (
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
-          <div>
-            <h3 className="font-extrabold text-sm text-slate-900">Year-over-Year Trend</h3>
-            <p className="text-xs text-slate-500 mt-0.5">Completion-year performance across all history — click a row to focus the report on that year</p>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-left text-slate-400 font-mono text-[10px] uppercase border-b border-slate-100">
-                  <th className="py-2 pr-4">Year</th>
-                  <th className="py-2 pr-4">Orders</th>
-                  <th className="py-2 pr-4">Booked Value</th>
-                  <th className="py-2 pr-4">OTIF</th>
-                  <th className="py-2">Avg Delay (Late)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {yearlyStats.map(ys => {
-                  const isSel = selectedYear === ys.year;
-                  const otifColor = ys.otif >= 85 ? 'text-emerald-700' : ys.otif >= 60 ? 'text-amber-700' : 'text-rose-700';
-                  return (
-                    <tr
-                      key={ys.year}
-                      onClick={() => setSelectedYear(isSel ? 'ALL' : ys.year)}
-                      className={`cursor-pointer hover:bg-slate-50 ${isSel ? 'bg-emerald-50/60' : ''}`}
-                    >
-                      <td className="py-2 pr-4 font-bold text-slate-900 font-mono">{ys.year}</td>
-                      <td className="py-2 pr-4 font-mono text-slate-700">{ys.totalOrders}</td>
-                      <td className="py-2 pr-4 font-mono text-slate-700">${ys.totalBooked.toLocaleString()}</td>
-                      <td className={`py-2 pr-4 font-mono font-bold ${otifColor}`}>{ys.otif}%</td>
-                      <td className="py-2 font-mono text-slate-700">+{ys.avgDelay}d</td>
+
+          {/* YEAR-OVER-YEAR TREND TABLE (click a year row to focus the report on it) */}
+          {yearlyStats.length >= 1 && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                <div>
+                  <h3 className="font-extrabold text-sm text-slate-900">Year-over-Year Trend</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Completion-year performance comparison — click a row to filter the entire report by that year</p>
+                </div>
+                {selectedYear !== 'ALL' && (
+                  <button
+                    onClick={() => setSelectedYear('ALL')}
+                    className="text-xs font-bold text-emerald-700 hover:text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 self-start sm:self-auto cursor-pointer"
+                  >
+                    Reset to All Years ✕
+                  </button>
+                )}
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-slate-400 font-mono text-[10px] uppercase border-b border-slate-100">
+                      <th className="py-2.5 px-3">Year</th>
+                      <th className="py-2.5 px-3 text-center">Orders</th>
+                      <th className="py-2.5 px-3 text-right">Booked Value</th>
+                      <th className="py-2.5 px-3 text-center">OTIF Rate</th>
+                      <th className="py-2.5 px-3 text-center">Avg Delay</th>
+                      <th className="py-2.5 px-3 text-right">Scope</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          {selectedYear !== 'ALL' && (
-            <p className="text-[10px] text-slate-400">Focused on {selectedYear} — click the row again to reset to All Years.</p>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {yearlyStats.map(ys => {
+                      const isSel = selectedYear === ys.year;
+                      const otifBadge = ys.otif >= 85 
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                        : ys.otif >= 60 
+                        ? 'bg-amber-50 text-amber-700 border-amber-200' 
+                        : 'bg-rose-50 text-rose-700 border-rose-200';
+                      return (
+                        <tr
+                          key={ys.year}
+                          onClick={() => setSelectedYear(isSel ? 'ALL' : ys.year)}
+                          className={`cursor-pointer transition-colors ${
+                            isSel 
+                              ? 'bg-emerald-50/80 hover:bg-emerald-100/60 font-medium' 
+                              : 'hover:bg-slate-50/90'
+                          }`}
+                        >
+                          <td className="py-3 px-3">
+                            <span className="font-bold text-slate-900 font-mono text-xs bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg inline-block">
+                              {ys.year}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 font-mono text-slate-700 text-center font-bold">
+                            {ys.totalOrders} {ys.totalOrders === 1 ? 'order' : 'orders'}
+                          </td>
+                          <td className="py-3 px-3 font-mono font-bold text-slate-900 text-right">
+                            {formatUSD(ys.totalBooked)}
+                          </td>
+                          <td className="py-3 px-3 text-center font-mono">
+                            <span className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] border inline-block ${otifBadge}`}>
+                              {ys.otif}%
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-center font-mono">
+                            {ys.avgDelay > 0 ? (
+                              <span className="px-2.5 py-0.5 rounded-full font-bold text-[11px] bg-rose-50 text-rose-700 border border-rose-200 inline-block">
+                                +{ys.avgDelay}d Late
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-0.5 rounded-full font-bold text-[11px] bg-emerald-50 text-emerald-700 border border-emerald-200 inline-block">
+                                0d On-Time
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-right">
+                            {isSel ? (
+                              <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded font-mono">
+                                ● Active Focus
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 group-hover:text-slate-600 font-mono">
+                                Click to focus →
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           )}
-        </div>
-      )}
 
       {/* ============================================================== */}
       {/* SECTION: VISUAL GRAPHS (Clean, Focused, Not Overwhelming)     */}
@@ -1724,7 +1839,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
                         </div>
                       </td>
                       <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">
-                        {booked > 0 ? `$${booked.toLocaleString()}` : '—'}
+                        {booked > 0 ? formatUSD(booked) : '—'}
                       </td>
                       <td className="py-3 px-4 font-mono text-slate-700">
                         {getOrderStartDate(po)}
