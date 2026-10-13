@@ -602,6 +602,27 @@ assert(qatarPO.productLines[0].productName === 'DN100 High Pressure Control Valv
 assert(book2Result.previewRows[0].completedStagesCount === 14, `Preview row correctly calculates 14 completed stages (got ${book2Result.previewRows[0].completedStagesCount})`);
 assert(book2Result.previewRows[0].currentActiveStageName.includes('14. Final Shipment'), `Preview row accurately displays Stage 14 status (got ${book2Result.previewRows[0].currentActiveStageName})`);
 
+const qatarBomMs = qatarPO.productLines[0].milestones.find(m => m.key === 'bom_release');
+assert(qatarBomMs !== undefined, 'Found Stage 4 BOM Release milestone on imported order');
+assert(qatarBomMs!.actualEndDate === '2026-09-10', `Stage 4 uses real BOM actual date 2026-09-10 instead of Mini-BOM 2026-09-08 (got ${qatarBomMs?.actualEndDate})`);
+assert(qatarBomMs!.committedBaselineEndDate === '2026-09-10', `Stage 4 committed baseline end date is real BOM planned date 2026-09-10 (got ${qatarBomMs?.committedBaselineEndDate})`);
+
+// Test Excel Import with Planned vs Actual Dates and Delay Calculation
+const delayTrackerCsv = `PO Number,Customer Name,Product Name,Customer PO Date,Contractual Delivery Date,S1_CustomerPO_Planned,S1_CustomerPO_Actual,S2_PMBaseline_Planned,S2_PMBaseline_Actual,S3_CORB_Planned,S3_CORB_Actual,S4_BOMRelease_Planned,S4_BOMRelease_Actual,S4_BOMRelease_Delay,Remarks
+PO-DELAY-TEST,Petrofac,10" 900# High Pressure Gate Valve,2026-09-01,2026-12-15,2026-09-01,2026-09-01,2026-09-04,2026-09-04,2026-09-07,2026-09-07,2026-09-10,2026-09-16,6,Customer delayed review of BOM spec`;
+
+const delayImportResult = parseAndValidateCsv(delayTrackerCsv, [], [], [], 'System Admin');
+assert(delayImportResult.isValid === true, `Delay tracker CSV parsed successfully (errors: ${delayImportResult.errors.join(', ')})`);
+const delayPO = delayImportResult.previewPOs[0];
+const delayBomMs = delayPO.productLines[0].milestones.find(m => m.key === 'bom_release');
+assert(delayBomMs !== undefined, 'Found BOM milestone in delay test PO');
+assert(delayBomMs!.committedBaselineEndDate === '2026-09-10', `Milestone committed baseline end date matches planned date (got ${delayBomMs?.committedBaselineEndDate})`);
+assert(delayBomMs!.actualEndDate === '2026-09-16', `Milestone actual end date matches imported actual date (got ${delayBomMs?.actualEndDate})`);
+assert(delayBomMs!.varianceDays === 6, `Delay calculation accurately evaluated +6d delay between planned and actual (got ${delayBomMs?.varianceDays})`);
+assert(delayBomMs!.delayCategory === 'Customer', `Delay category correctly identified as Customer for BOM (got ${delayBomMs?.delayCategory})`);
+assert(Boolean(delayBomMs!.delayReason?.includes('Customer delayed review of BOM spec') || delayBomMs!.delayReason?.includes('+6d')), `Delay reason preserved (got ${delayBomMs?.delayReason})`);
+assert(delayPO.productLines[0].overallVarianceDays >= 6, `Product line overall variance reflects milestone delay (got ${delayPO.productLines[0].overallVarianceDays})`);
+
 // TEST GROUP 12: High-Volume 500+ Orders Scalability & Performance Benchmark
 console.log('\n📋 GROUP 12: High-Volume 500+ Orders Scalability & Performance Benchmark');
 

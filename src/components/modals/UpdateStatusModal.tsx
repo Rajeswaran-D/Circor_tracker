@@ -4,7 +4,7 @@ import type { PurchaseOrder } from '../../types';
 import { ROLE_PERMISSIONS } from '../../types';
 import { X, Wrench, CheckCircle2, Play, Save, AlertTriangle } from 'lucide-react';
 import { getPOManufacturingStatus } from '../../utils/statusUtils';
-import { clampDateMax, todayLocal, getDaysDifference, getMilestoneRevisedDates } from '../../services/calculationEngine';
+import { clampDateMax, todayLocal, getDaysDifference, getMilestoneRevisedDates, addDays } from '../../services/calculationEngine';
 
 interface UpdateStatusModalProps {
   isOpen: boolean;
