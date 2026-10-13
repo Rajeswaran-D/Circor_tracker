@@ -3,7 +3,8 @@ import {
   getDaysDifference, 
   recalculateProductLine, 
   validateEventDate,
-  getMilestoneRevisedDates
+  getMilestoneRevisedDates,
+  buildTemplateSchedule
 } from '../services/calculationEngine.ts';
 import { getPOManufacturingStatus } from '../utils/statusUtils.ts';
 import { extractDelayFlow } from '../components/common/DelayAnalysisFlow.tsx';
@@ -73,7 +74,7 @@ const createMilestone = (
   baseStart: string,
   status: Milestone['status'] = 'Not Started'
 ): Milestone => {
-  const baseEnd = addDays(baseStart, durationDays);
+  const baseEnd = addDays(baseStart, Math.max(1, durationDays) - 1);
   return {
     id,
     key,
@@ -112,7 +113,7 @@ const build14Milestones = (startDate: string): Milestone[] => {
   let currentStart = startDate;
   return stages.map((s, idx) => {
     const ms = createMilestone(`ms-${idx + 1}`, s.key, s.name, idx + 1, s.dur, currentStart);
-    currentStart = ms.committedBaselineEndDate;
+    currentStart = addDays(ms.committedBaselineEndDate, 1);
     return ms;
   });
 };
@@ -306,16 +307,16 @@ assert(delaySummaryString.includes('PM Baseline (+4d') && delaySummaryString.inc
 // Test early completion recovery: Stage 4 starts on 08-15 (6d behind plan) and is completed the
 // same day. A stage can never end before it starts, so the engine keeps the end at 08-15 (5d
 // shorter than its 5d plan) and the line recovers from +6d to a net +1d at WO Release.
-line1.milestones[3].actualStartDate = '2026-08-15';
-line1.milestones[3].actualEndDate = '2026-08-15';
+line1.milestones[3].actualStartDate = '2026-08-14';
+line1.milestones[3].actualEndDate = '2026-08-14';
 line1.milestones[3].status = 'Completed';
 line1.milestones[3].completionPct = 100;
 line1.milestones[3].varianceDays = 0;
 
 const recoveredLine = recalculateProductLine(line1, '2026-10-05', 2, 5);
-assert(recoveredLine.overallVarianceDays === 1, `Line overall variance recovers from +6d to +1d after Stage 4 completes quickly (got ${recoveredLine.overallVarianceDays}d)`);
+assert(recoveredLine.overallVarianceDays === 2, `Line overall variance recovers from +6d to +2d after Stage 4 completes quickly (got ${recoveredLine.overallVarianceDays}d)`);
 assert(recoveredLine.overallVarianceDays < 6, 'Early completion of Stage 4 reduces the accumulated delay');
-assert(recoveredLine.status === 'Delayed', `Line stays Delayed while a +1d variance remains (got ${recoveredLine.status})`);
+assert(recoveredLine.status === 'Delayed', `Line stays Delayed while variance remains (got ${recoveredLine.status})`);
 
 // Test complete recovery to 0d variance: Stage 5 starts on time and completes within baseline end
 line1.milestones[4].actualStartDate = line1.milestones[4].committedBaselineStartDate;
@@ -335,6 +336,7 @@ assert(stage6.status !== 'Delayed', `Forthcoming stage status is not Delayed aft
 
 const mockPO: PurchaseOrder = {
   ...po,
+  revisedDeliveryDate: fullyRecoveredLine.milestones[fullyRecoveredLine.milestones.length - 1].forecastEndDate,
   status: 'In Progress',
   productLines: [fullyRecoveredLine]
 };
@@ -486,7 +488,7 @@ const line1Delayed = recalculateProductLine({
   status: 'Delayed',
   overallVarianceDays: 4,
   milestones: build14Milestones('2026-08-01').map((m, idx) => {
-    if (idx === 0) return { ...m, status: 'Completed', actualEndDate: '2026-08-07', varianceDays: 4 };
+    if (idx === 0) return { ...m, status: 'Completed', actualEndDate: '2026-08-06', varianceDays: 4 };
     return { ...m, forecastEndDate: addDays(m.committedBaselineEndDate, 4), varianceDays: 4 };
   })
 }, '2026-08-10');
@@ -502,7 +504,7 @@ const line2OnTime = recalculateProductLine({
   status: 'In Progress',
   overallVarianceDays: 0,
   milestones: build14Milestones('2026-08-01').map((m, idx) => {
-    if (idx === 0) return { ...m, status: 'Completed', actualEndDate: '2026-08-03', varianceDays: 0 };
+    if (idx === 0) return { ...m, status: 'Completed', actualEndDate: '2026-08-02', varianceDays: 0 };
     return m;
   })
 }, '2026-08-10');
@@ -594,6 +596,8 @@ const qatarPO = book2Result.previewPOs[0];
 assert(qatarPO.poNumber === 'PO-QE-991', `Extracted correct PO NO from Book2 format (got ${qatarPO.poNumber})`);
 assert(qatarPO.customerName === 'Qatar Energy', `Extracted correct Customer Name (got ${qatarPO.customerName})`);
 assert(qatarPO.bookedAmount === 150000, `Extracted correct Booked Amount from Book2 format (got ${qatarPO.bookedAmount})`);
+assert(qatarPO.startDate === '2026-09-01', `Extracted correct Start Date from Book2 format (got ${qatarPO.startDate})`);
+assert(book2Result.previewRows[0].bookedAmount === 150000, `Preview row correctly captured Booked Amount of $150,000 (got ${book2Result.previewRows[0].bookedAmount})`);
 assert(qatarPO.productLines[0].productName === 'DN100 High Pressure Control Valve', `Extracted correct Scope/Product Name (got ${qatarPO.productLines[0].productName})`);
 assert(book2Result.previewRows[0].completedStagesCount === 14, `Preview row correctly calculates 14 completed stages (got ${book2Result.previewRows[0].completedStagesCount})`);
 assert(book2Result.previewRows[0].currentActiveStageName.includes('14. Final Shipment'), `Preview row accurately displays Stage 14 status (got ${book2Result.previewRows[0].currentActiveStageName})`);
@@ -795,22 +799,22 @@ const mockCompletedOrder2026: PurchaseOrder = {
 
 const allMockCompleted = [mockCompletedOrder2025, mockCompletedOrder2026];
 
-// Test Year 2025 aggregation
+// Test Year 2025 aggregation grouped by start date
 const orders2025 = allMockCompleted.filter(po => {
-  const d = po.actualDeliveryDate || po.committedDeliveryDate;
+  const d = po.startDate || po.poDate;
   return d.startsWith('2025');
 });
-assert(orders2025.length === 1, `Filtered 2025 completed orders correctly (got ${orders2025.length})`);
+assert(orders2025.length === 1, `Filtered 2025 completed orders correctly by start date (got ${orders2025.length})`);
 assert(orders2025[0].bookedAmount === 240000, `2025 Booked Amount matches $240,000 (got ${orders2025[0].bookedAmount})`);
 const summary2025 = getPOManufacturingStatus(orders2025[0]);
 assert(summary2025.delayDays === 0, `2025 order has 0d delay (got ${summary2025.delayDays}d)`);
 
-// Test Year 2026 aggregation
+// Test Year 2026 aggregation grouped by start date
 const orders2026 = allMockCompleted.filter(po => {
-  const d = po.actualDeliveryDate || po.committedDeliveryDate;
+  const d = po.startDate || po.poDate;
   return d.startsWith('2026');
 });
-assert(orders2026.length === 1, `Filtered 2026 completed orders correctly (got ${orders2026.length})`);
+assert(orders2026.length === 1, `Filtered 2026 completed orders correctly by start date (got ${orders2026.length})`);
 assert(orders2026[0].bookedAmount === 380000, `2026 Booked Amount matches $380,000 (got ${orders2026[0].bookedAmount})`);
 const summary2026 = getPOManufacturingStatus(orders2026[0]);
 assert(summary2026.delayDays === 11, `2026 order has +11d schedule overrun (got ${summary2026.delayDays}d)`);
@@ -1046,10 +1050,11 @@ const fullS7OrderLine: ProductLine = {
   qty: 5,
   materials: [{
     id: 'mat-s7',
-    name: 'Cast Steel Body WCB',
-    specification: 'ASTM A216 WCB',
-    quantity: 5,
+    itemCode: 'MAT-CS-WCB',
+    description: 'Cast Steel Body WCB',
+    qty: 5,
     unit: 'pcs',
+    supplierName: 'Sandvik Precision Castings',
     leadTimeDays: 25,
     isCriticalPath: true,
     orderedDate: '2026-11-07',
@@ -1120,11 +1125,20 @@ const s7OrderPO: PurchaseOrder = {
   id: 'po-s7-test',
   poNumber: 'PO-S7-TEST',
   customerName: 'Test Customer',
+  customerPoRef: 'REF-S7-01',
+  contractReviewRef: 'CR-S7-01',
   poDate: '2026-10-29',
   committedDeliveryDate: '2027-01-18',
+  revisedDeliveryDate: '2027-01-18',
   status: 'In Progress',
-  delayDays: 2,
-  productLines: [recalcedLine]
+  productLines: [recalcedLine],
+  revisions: [],
+  attachments: [],
+  createdBy: 'Sales',
+  createdAt: '2026-10-29',
+  lastUpdatedBy: 'Stores',
+  lastUpdatedAt: '2026-10-29',
+  isClosed: false
 };
 
 const s7DelayLedger = extractDelayFlow(s7OrderPO);
@@ -1148,10 +1162,11 @@ const lineUserScreenshot: ProductLine = {
   qty: 1,
   materials: [{
     id: 'mat-18d',
-    name: 'Cast Body',
-    specification: 'ASTM A216 WCB',
-    quantity: 1,
+    itemCode: 'MAT-CB-18',
+    description: 'Cast Body',
+    qty: 1,
     unit: 'pcs',
+    supplierName: 'Sandvik Precision Castings',
     leadTimeDays: 18,
     isCriticalPath: true,
     orderedDate: '2026-11-04',
@@ -1286,6 +1301,240 @@ const estStartTarget = '2026-10-05';
 const actualStartEntered = '2026-10-08'; // 3 days late
 const delayAddedStart = (actualStartEntered > estStartTarget) ? getDaysDifference(estStartTarget, actualStartEntered) : 0;
 assert(delayAddedStart === 3, `Entering stage start date after estimated target adds 3 days delay (got ${delayAddedStart}d)`);
+
+console.log('\n📋 GROUP 17: In-Progress Active Stage Delay Reflection in Revised Baseline & Cascade');
+
+// Test 1: Stage 8 with +8d inherited shift and +5d added delay (total 13d)
+const mockStage7: Milestone = {
+  id: 'ms-7-test',
+  key: 'material_receipt',
+  name: '7. Material Receipt (GRN)',
+  stageOrder: 7,
+  defaultDurationDays: 15,
+  committedBaselineStartDate: '2026-10-22',
+  committedBaselineEndDate: '2026-11-06',
+  committedDurationDays: 15,
+  forecastStartDate: '2026-10-25',
+  forecastEndDate: '2026-11-14',
+  actualStartDate: '2026-10-25',
+  actualEndDate: '2026-11-14',
+  varianceDays: 8,
+  status: 'Completed',
+  completionPct: 100
+};
+
+const mockStage8: Milestone = {
+  id: 'ms-8-test',
+  key: 'machining',
+  name: '8. Machining & Fabrication',
+  stageOrder: 8,
+  defaultDurationDays: 10,
+  committedBaselineStartDate: '2026-11-06',
+  committedBaselineEndDate: '2026-11-16',
+  committedDurationDays: 10,
+  forecastStartDate: '2026-11-14',
+  forecastEndDate: '2026-11-29', // 5 days added delay (15d total duration)
+  actualStartDate: '2026-11-14',
+  varianceDays: 13, // 8d inherited + 5d added
+  delayReason: 'Tooling recalibration and custom fixture machining',
+  status: 'In Progress',
+  completionPct: 30
+};
+
+const mockStage9: Milestone = {
+  id: 'ms-9-test',
+  key: 'assembly',
+  name: '9. Assembly',
+  stageOrder: 9,
+  defaultDurationDays: 4,
+  committedBaselineStartDate: '2026-11-16',
+  committedBaselineEndDate: '2026-11-20',
+  committedDurationDays: 4,
+  forecastStartDate: '2026-11-16',
+  forecastEndDate: '2026-11-20',
+  varianceDays: 0,
+  status: 'Not Started',
+  completionPct: 0
+};
+
+const s8Revised = getMilestoneRevisedDates(mockStage8, mockStage7, '2026-10-22', '2027-01-15');
+assert(s8Revised.revisedStart === '2026-11-14', `Stage 8 revisedStart is 2026-11-14 (got ${s8Revised.revisedStart})`);
+assert(s8Revised.revisedEnd === '2026-11-29', `Stage 8 revisedEnd incorporates +5d added delay to 2026-11-29 (got ${s8Revised.revisedEnd})`);
+assert(s8Revised.shiftDays === 13, `Stage 8 total shiftDays evaluates to +13d (got ${s8Revised.shiftDays})`);
+
+// Test 2: Downstream Stage 9 correctly inherits Stage 8's revised completion date
+const s9Revised = getMilestoneRevisedDates(mockStage9, mockStage8, '2026-10-22', '2027-01-15');
+assert(s9Revised.revisedStart === '2026-11-29', `Stage 9 revisedStart chains to Stage 8 delayed end 2026-11-29 (got ${s9Revised.revisedStart})`);
+assert(s9Revised.revisedEnd === '2026-12-03', `Stage 9 revisedEnd shifts by full cumulative delay to 2026-12-03 (got ${s9Revised.revisedEnd})`);
+assert(s9Revised.shiftDays === 13, `Stage 9 reflects full cumulative +13d shift from Stage 8 (got ${s9Revised.shiftDays})`);
+
+// Test 3: recalculateProductLine cascades active milestone delay to all subsequent milestones
+const cascadeTestLine: ProductLine = {
+  id: 'line-cascade-test',
+  lineNumber: 'LINE-01',
+  productName: 'Gate Valve Class 600',
+  designType: 'Existing Design',
+  category: 'Valves',
+  overallVarianceDays: 0,
+  status: 'In Progress',
+  qty: 1,
+  materials: [],
+  milestones: [mockStage7, mockStage8, mockStage9]
+};
+
+const recalcedCascadeLine = recalculateProductLine(cascadeTestLine, '2026-11-15', 3, 7);
+const recalcedS8 = recalcedCascadeLine.milestones.find(m => m.key === 'machining')!;
+const recalcedS9 = recalcedCascadeLine.milestones.find(m => m.key === 'assembly')!;
+
+assert(recalcedS8.forecastEndDate === '2026-11-29', `recalculateProductLine preserves Stage 8 delayed forecastEnd 2026-11-29 (got ${recalcedS8.forecastEndDate})`);
+assert(recalcedS9.forecastStartDate === '2026-11-30', `recalculateProductLine cascades Stage 8 delayed end to Stage 9 forecastStart (got ${recalcedS9.forecastStartDate})`);
+assert(recalcedS9.forecastEndDate === '2026-12-04', `Stage 9 forecastEnd is 2026-12-04 (got ${recalcedS9.forecastEndDate})`);
+assert(recalcedS9.varianceDays === 13, `Stage 9 varianceDays accurately evaluates to +13d (got ${recalcedS9.varianceDays})`);
+
+// ----------------------------------------------------------------------------
+// TEST GROUP 18: Material Receipt Completion & Unstarted Machining Delay Immunity
+// ----------------------------------------------------------------------------
+console.log('\n📋 GROUP 18: Zero False Machining Delay & Material Baseline Lead Time Protection');
+
+// Test 1: buildTemplateSchedule protects raw material lead time and prevents date gaps
+const plannedSchedule = buildTemplateSchedule({
+  designType: 'Existing Design',
+  materials: [
+    {
+      id: 'mat-body',
+      itemCode: 'MAT-WCB-BODY',
+      description: 'WCB Cast Body',
+      qty: 1,
+      unit: 'pcs',
+      supplierName: 'Foundry Mill',
+      leadTimeDays: 20,
+      isCriticalPath: true
+    }
+  ],
+  startDate: '2026-10-01',
+  lineId: 'line-test-18',
+  targetEndDate: '2026-11-20'
+});
+
+const s7Planned = plannedSchedule.find(m => m.key === 'material_receipt')!;
+const s8Planned = plannedSchedule.find(m => m.key === 'machining')!;
+assert(s7Planned.committedDurationDays === 20, `Stage 7 baseline duration strictly preserves 20d material lead time (got ${s7Planned.committedDurationDays}d)`);
+assert(s8Planned.committedBaselineStartDate === addDays(s7Planned.committedBaselineEndDate, 1), `Stage 8 baseline start immediately follows Stage 7 baseline end (${s8Planned.committedBaselineStartDate} === ${addDays(s7Planned.committedBaselineEndDate, 1)})`);
+
+// Test 2: Completing Stage 7 does not attribute delay to unstarted Stage 8 Machining
+const orderLineGroup18: ProductLine = {
+  id: 'line-grp-18',
+  lineNumber: 'LINE-01',
+  productName: 'Gate Valve High Pressure',
+  designType: 'Existing Design',
+  category: 'Valves',
+  overallVarianceDays: 0,
+  status: 'In Progress',
+  qty: 1,
+  materials: [
+    {
+      id: 'mat-alloy',
+      itemCode: 'MAT-ALLOY-900',
+      description: 'Alloy Body Cast',
+      qty: 1,
+      unit: 'pcs',
+      supplierName: 'Precision Foundry',
+      leadTimeDays: 20,
+      isCriticalPath: true,
+      orderedDate: '2026-10-25',
+      expectedDate: '2026-11-14',
+      receivedDate: '2026-11-14',
+      inspectionResult: 'Passed'
+    }
+  ],
+  milestones: [
+    {
+      id: 'ms-18-6',
+      key: 'sub_supplier_po',
+      name: '6. Sub-Supplier PO',
+      stageOrder: 6,
+      defaultDurationDays: 3,
+      committedBaselineStartDate: '2026-10-18',
+      committedBaselineEndDate: '2026-10-21',
+      committedDurationDays: 3,
+      forecastStartDate: '2026-10-22',
+      forecastEndDate: '2026-10-25',
+      actualStartDate: '2026-10-22',
+      actualEndDate: '2026-10-25',
+      varianceDays: 4,
+      status: 'Completed',
+      completionPct: 100
+    },
+    {
+      id: 'ms-18-7',
+      key: 'material_receipt',
+      name: '7. Material Receipt (GRN)',
+      stageOrder: 7,
+      defaultDurationDays: 20,
+      committedBaselineStartDate: '2026-10-21',
+      committedBaselineEndDate: '2026-11-10',
+      committedDurationDays: 20,
+      forecastStartDate: '2026-10-25',
+      forecastEndDate: '2026-11-14',
+      actualStartDate: '2026-10-25',
+      actualEndDate: '2026-11-14',
+      varianceDays: 4,
+      status: 'Completed',
+      completionPct: 100
+    },
+    {
+      id: 'ms-18-8',
+      key: 'machining',
+      name: '8. Machining & Fabrication',
+      stageOrder: 8,
+      defaultDurationDays: 14,
+      committedBaselineStartDate: '2026-11-10',
+      committedBaselineEndDate: '2026-11-24',
+      committedDurationDays: 14,
+      forecastStartDate: '2026-11-10',
+      forecastEndDate: '2026-11-24',
+      varianceDays: 0,
+      status: 'Not Started',
+      completionPct: 0
+    }
+  ]
+};
+
+const recalcedLine18 = recalculateProductLine(orderLineGroup18, '2026-11-14', 3, 7);
+const recalcedS7_18 = recalcedLine18.milestones.find(m => m.key === 'material_receipt')!;
+const recalcedS8_18 = recalcedLine18.milestones.find(m => m.key === 'machining')!;
+
+assert(recalcedS8_18.status === 'Not Started', `Unstarted Machining stage status is Not Started (got ${recalcedS8_18.status})`);
+assert(recalcedS8_18.varianceDays === recalcedS7_18.varianceDays, `Machining variance (${recalcedS8_18.varianceDays}d) equals Stage 7 inherited variance (${recalcedS7_18.varianceDays}d)`);
+const addedAtS8 = Math.max(0, (recalcedS8_18.varianceDays || 0) - (recalcedS7_18.varianceDays || 0));
+assert(addedAtS8 === 0, `Added delay at Machining before starting is strictly 0d (got ${addedAtS8}d)`);
+
+const poGrp18: PurchaseOrder = {
+  id: 'po-grp-18',
+  poNumber: 'PO-GRP-18',
+  customerName: 'Aramco Offshore',
+  customerPoRef: 'REF-18',
+  contractReviewRef: 'CR-18',
+  poDate: '2026-10-01',
+  committedDeliveryDate: '2026-12-15',
+  revisedDeliveryDate: '2026-12-19',
+  status: 'In Progress',
+  productLines: [recalcedLine18],
+  revisions: [],
+  attachments: [],
+  createdBy: 'Sales',
+  createdAt: '2026-10-01',
+  lastUpdatedBy: 'Stores',
+  lastUpdatedAt: '2026-11-14',
+  isClosed: false
+};
+
+const mfgStatus18 = getPOManufacturingStatus(poGrp18);
+assert(mfgStatus18.delayedStageName !== '8. Machining & Fabrication', `delayedStageName is NOT attributed to unstarted Machining (got ${mfgStatus18.delayedStageName})`);
+
+const delayLedger18 = extractDelayFlow(poGrp18);
+const hasS8DelayStep = delayLedger18.delaySteps.some(s => s.stageKey === 'machining');
+assert(!hasS8DelayStep, 'Delay Analysis Flow does not contain any false delay step for unstarted Machining');
 
 console.log('\n================================================================');
 const successRate = totalTests === 0 ? 0 : Math.round((passedTests / totalTests) * 100);

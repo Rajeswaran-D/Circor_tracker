@@ -254,16 +254,38 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
     return po.revisedDeliveryDate || po.committedDeliveryDate || po.poDate;
   };
 
-  const getCompletionYear = (po: PurchaseOrder): number => {
-    const dStr = getCompletionDate(po);
-    if (dStr && dStr.length >= 4) {
-      const parsed = parseInt(dStr.slice(0, 4), 10);
+  // Helper to extract order start date
+  const getOrderStartDate = (po: PurchaseOrder): string => {
+    if (po.startDate) return po.startDate;
+    if (po.poDate) return po.poDate;
+
+    // First milestone start date
+    for (const line of po.productLines || []) {
+      const msList = line.milestones || [];
+      const ms1 = msList.find(m => m.stageOrder === 1 || m.key === 'po_from_customer');
+      if (ms1?.actualStartDate) return ms1.actualStartDate;
+      if (ms1?.committedBaselineStartDate) return ms1.committedBaselineStartDate;
+      if (msList[0]?.actualStartDate) return msList[0].actualStartDate;
+      if (msList[0]?.committedBaselineStartDate) return msList[0].committedBaselineStartDate;
+    }
+
+    return po.createdAt ? po.createdAt.slice(0, 10) : new Date().toISOString().slice(0, 10);
+  };
+
+  // Group year-wise orders strictly by start date
+  const getOrderStartYear = (po: PurchaseOrder): number => {
+    const sStr = getOrderStartDate(po);
+    if (sStr && sStr.length >= 4) {
+      const parsed = parseInt(sStr.slice(0, 4), 10);
       if (!isNaN(parsed) && parsed >= 2000 && parsed <= 2099) {
         return parsed;
       }
     }
     return new Date().getFullYear();
   };
+
+  // Alias for backward compatibility
+  const getCompletionYear = getOrderStartYear;
 
   // Helper to extract 100% accurate net delay days for an order from system delivery records
   const getPOEffectiveDelay = (po: PurchaseOrder): number => {
@@ -799,7 +821,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
   // Export CSV (respects the currently visible filters — status + search)
   const handleExportCSV = () => {
     if (filteredOrders.length === 0) return;
-    const headers = ['PO Number', 'Customer', 'Product', 'Booked Amount ($)', 'PO Date', 'Delivered Date', 'Variance (Days)', 'Status', 'Bottleneck Stage'];
+    const headers = ['PO Number', 'Customer', 'Product', 'Booked Amount ($)', 'Start Date', 'Delivered Date', 'Variance (Days)', 'Status', 'Bottleneck Stage'];
     const rows = filteredOrders.map(po => {
       const line = po.productLines[0];
       const effDelay = getPOEffectiveDelay(po);
@@ -812,7 +834,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
         `"${po.customerName.replace(/"/g, '""')}"`,
         `"${(line?.productName || '').replace(/"/g, '""')}"`,
         po.bookedAmount || 0,
-        `"${po.poDate}"`,
+        `"${getOrderStartDate(po)}"`,
         `"${getCompletionDate(po)}"`,
         effDelay,
         effDelay > 0 ? '"Delayed"' : '"On-Time"',
@@ -842,7 +864,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-emerald-100 text-emerald-800 border border-emerald-200">
-              ANNUAL REPORT
+              ANNUAL REPORT • GROUPED BY START DATE
             </span>
             <span className="text-xs text-slate-400 font-mono">
               {completedOrders.length} Total Historical Completed Orders
@@ -852,7 +874,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
             Year-Wise Completed Orders & Performance Insights
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Key delivery metrics, bottleneck graphs, and practical takeaways to improve manufacturing schedules.
+            Key delivery metrics, bottleneck graphs, and practical takeaways grouped by order start date (intake year).
           </p>
         </div>
 
@@ -1663,6 +1685,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
                 <th className="py-3 px-4">Customer</th>
                 <th className="py-3 px-4">Product Details</th>
                 <th className="py-3 px-4 text-right">Booked Amount</th>
+                <th className="py-3 px-4">Start Date</th>
                 <th className="py-3 px-4">Delivered Date</th>
                 <th className="py-3 px-4 text-center">Variance</th>
                 <th className="py-3 px-4">Bottleneck Stage</th>
@@ -1672,7 +1695,7 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
             <tbody className="divide-y divide-slate-100 text-slate-800">
               {filteredOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                  <td colSpan={9} className="py-12 text-center text-slate-400">
                     No completed orders match the chosen filter.
                   </td>
                 </tr>
@@ -1702,6 +1725,9 @@ export const YearlyCompletedOrdersReport: React.FC<YearlyCompletedOrdersReportPr
                       </td>
                       <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">
                         {booked > 0 ? `$${booked.toLocaleString()}` : '—'}
+                      </td>
+                      <td className="py-3 px-4 font-mono text-slate-700">
+                        {getOrderStartDate(po)}
                       </td>
                       <td className="py-3 px-4 font-mono text-slate-700">
                         {compDate}

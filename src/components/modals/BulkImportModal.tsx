@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../../context/AppContext';
 import {
@@ -17,7 +17,8 @@ import {
   RefreshCw,
   Eye,
   Info,
-  ShieldAlert
+  ShieldAlert,
+  DollarSign
 } from 'lucide-react';
 
 interface BulkImportModalProps {
@@ -40,6 +41,12 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
   const [currentPage, setCurrentPage] = useState(1);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const totalBookedValue = useMemo(() => {
+    return previewResult
+      ? previewResult.previewPOs.reduce((acc, po) => acc + (typeof po.bookedAmount === 'number' && !isNaN(po.bookedAmount) ? po.bookedAmount : 0), 0)
+      : 0;
+  }, [previewResult]);
 
   if (!isOpen) return null;
 
@@ -208,7 +215,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
                 <div className="space-y-1 text-blue-900">
                   <p className="font-semibold">How Bulk Import Works:</p>
                   <p className="text-blue-800 leading-relaxed">
-                    Provide <strong>PO Number, Customer, Tag/Line, Qty</strong>, and fill out historical actual completion dates for stages (e.g. <code>S1_CustomerPO_Actual</code> through <code>S14_Shipment_Actual</code>). The engine automatically marks past stages as completed, activates the current milestone, and derives 14-stage baseline matrix schedules without disrupting ongoing system workflows.
+                    Provide <strong>PO Number, Customer, Tag/Line, Qty, Booked Amount</strong>, and fill out historical actual completion dates for stages (e.g. <code>S1_CustomerPO_Actual</code> through <code>S14_Shipment_Actual</code>). The engine automatically marks past stages as completed, activates the current milestone, and derives 14-stage baseline matrix schedules without disrupting ongoing system workflows.
                   </p>
                 </div>
               </div>
@@ -302,7 +309,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
             <div className="space-y-4 pt-2 border-t border-slate-200">
               
               {/* Summary Metrics */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className={`grid grid-cols-2 ${totalBookedValue > 0 ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-3`}>
                 <div className="bg-slate-100 p-3 rounded-xl border border-slate-200">
                   <span className="text-slate-500 font-medium">Detected POs</span>
                   <p className="text-lg font-black text-slate-900 mt-0.5">{previewResult.totalPOs}</p>
@@ -311,6 +318,16 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
                   <span className="text-slate-500 font-medium">Total Product Lines</span>
                   <p className="text-lg font-black text-slate-900 mt-0.5">{previewResult.totalProductLines}</p>
                 </div>
+                {totalBookedValue > 0 && (
+                  <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-emerald-900">
+                    <span className="text-emerald-700 font-medium flex items-center gap-1 text-xs">
+                      <DollarSign className="w-3.5 h-3.5" /> Booked Value
+                    </span>
+                    <p className="text-lg font-black text-emerald-950 font-mono mt-0.5">
+                      ${totalBookedValue.toLocaleString()}
+                    </p>
+                  </div>
+                )}
                 <div className={`p-3 rounded-xl border ${previewResult.errors.length > 0 ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
                   <span className="font-medium">Validation Status</span>
                   <div className="flex items-center gap-1.5 mt-0.5">
@@ -397,6 +414,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
                         <th className="py-2 px-3">Line Item & Product</th>
                         <th className="py-2 px-3">Design Type</th>
                         <th className="py-2 px-3">Qty</th>
+                        <th className="py-2 px-3 text-right">Booked Amount</th>
                         <th className="py-2 px-3">PO Date</th>
                         <th className="py-2 px-3">Completed Stages</th>
                         <th className="py-2 px-3">Active Stage</th>
@@ -406,7 +424,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
                     <tbody className="divide-y divide-slate-100 bg-white">
                       {paginatedRows.length === 0 ? (
                         <tr>
-                          <td colSpan={9} className="py-6 text-center text-slate-400">
+                          <td colSpan={10} className="py-6 text-center text-slate-400">
                             No matching preview rows found.
                           </td>
                         </tr>
@@ -429,6 +447,11 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ isOpen, onClos
                               </span>
                             </td>
                             <td className="py-2 px-3 font-bold font-mono text-slate-900">{row.qty} pcs</td>
+                            <td className="py-2 px-3 text-right font-mono font-bold text-slate-800">
+                              {typeof row.bookedAmount === 'number' && !isNaN(row.bookedAmount) && row.bookedAmount > 0
+                                ? `$${row.bookedAmount.toLocaleString()}`
+                                : '—'}
+                            </td>
                             <td className="py-2 px-3 font-mono text-slate-600">{row.customerPoDate}</td>
                             <td className="py-2 px-3">
                               <div className="flex items-center gap-2">

@@ -612,9 +612,6 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                       const currVariance = Math.max(0, typeof ms.varianceDays === 'number' ? ms.varianceDays : 0);
                       const prevVariance = prevMs ? Math.max(0, typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0) : 0;
                       const addedDelayHere = Math.max(0, currVariance - prevVariance);
-                      const isNewDelayFormedAtThisStage = addedDelayHere > 0;
-                      const hasInheritedShift = currVariance > 0 && !isNewDelayFormedAtThisStage;
-
                       const isCompleted = ms.status === 'Completed' || Boolean(ms.actualEndDate) || allLinesDone;
                       const recoveredDelay = isCompleted ? Math.max(0, prevVariance - currVariance) : 0;
                       const isStarted = (Boolean(ms.actualStartDate) || productLineMilestones.some(p => p.isLineStarted)) && !isCompleted;
@@ -622,9 +619,11 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                       const isPendingBaseline = po.status === 'Baseline Pending';
                       const activeStageIdx = selectedLine.milestones.findIndex(m => m.status !== 'Completed' && !m.actualEndDate);
                       const isCurrent = !isPendingBaseline && index === activeStageIdx;
+                      const isUnstarted = !isCompleted && !isInProgress && !isStarted;
+                      const isNewDelayFormedAtThisStage = !isUnstarted && addedDelayHere > 0;
+                      const hasInheritedShift = currVariance > 0 && !isNewDelayFormedAtThisStage;
                       const friendlyName = getStageFriendlyName(ms.key, selectedLine);
 
-                      const prevEffectiveEnd = prevMs?.actualEndDate || prevMs?.forecastEndDate;
                       const {
                         revisedStart,
                         revisedEnd,
@@ -633,6 +632,9 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                         baselineEnd: bEnd,
                         baselineDuration
                       } = getMilestoneRevisedDates(ms, prevMs, po.poDate, po.committedDeliveryDate);
+
+                      const prevRevDates = prevMs ? getMilestoneRevisedDates(prevMs, index > 1 ? selectedLine.milestones[index - 2] : null, po.poDate, po.committedDeliveryDate) : null;
+                      const prevEffectiveEnd = prevMs?.actualEndDate || prevRevDates?.revisedEnd || prevMs?.forecastEndDate;
 
                       const delayedLineWithReason = productLineMilestones.find(p => p.delayReason && !p.delayReason.startsWith('Cascaded delay') && !p.delayReason.startsWith('Inherited delay'));
                       const stageDelayReason = delayedLineWithReason?.delayReason || (ms.delayReason && !ms.delayReason.startsWith('Cascaded delay') && !ms.delayReason.startsWith('Inherited delay') ? ms.delayReason : undefined);
@@ -695,11 +697,13 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                                   : isNewDelayFormedAtThisStage 
                                   ? `Delay (+${addedDelayHere}d)`
                                   : hasInheritedShift
-                                  ? (isInProgress ? `In Execution (Previous: +${currVariance}d)` : `Previous (+${currVariance}d)`)
+                                  ? (isInProgress ? `In Execution (Previous: +${currVariance}d)` : isCurrent ? `Ready to Start (Previous: +${currVariance}d)` : `Previous (+${currVariance}d)`)
                                   : isInProgress 
                                   ? 'IN EXECUTION'
                                   : isPendingBaseline 
                                   ? 'Baseline Pending'
+                                  : isCurrent
+                                  ? 'Ready to Start'
                                   : 'Not Started'}
                               </span>
                             </div>
@@ -714,7 +718,11 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                                 </div>
                                 {shiftDays > 0 ? (
                                   <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
-                                    +{shiftDays}d shift from Stage {prevMs?.stageOrder || 'previous'} delay
+                                    {isNewDelayFormedAtThisStage && prevVariance > 0
+                                      ? `+${prevVariance}d shift from Stage ${prevMs?.stageOrder || 'previous'} delay (+${addedDelayHere}d added here)`
+                                      : isNewDelayFormedAtThisStage
+                                      ? `+${addedDelayHere}d delay added at this stage`
+                                      : `+${shiftDays}d shift from Stage ${prevMs?.stageOrder || 'previous'} delay`}
                                   </span>
                                 ) : (
                                   <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
@@ -731,7 +739,7 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                                     <strong className="text-amber-950">{revisedStart} &rarr; {revisedEnd}</strong>
                                   </div>
                                   <span className="text-[9px] text-amber-700 font-medium">
-                                    Target start: {prevEffectiveEnd} (Previous end date)
+                                    Target start: {revisedStart} {prevEffectiveEnd ? `(Following Stage ${prevMs?.stageOrder || 'previous'} completion: ${prevEffectiveEnd})` : ''}
                                   </span>
                                 </div>
                               )}

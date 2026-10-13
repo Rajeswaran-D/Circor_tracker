@@ -282,6 +282,7 @@ export interface PurchaseOrder {
   customerName: string;
   customerPoRef: string;
   poDate: string;
+  startDate?: string;
   bookedAmount?: number;
   contractReviewRef: string;
   committedDeliveryDate: string;

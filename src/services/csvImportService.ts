@@ -47,6 +47,7 @@ export interface ImportPreviewRow {
   category: string;
   designType: DesignType;
   qty: number;
+  bookedAmount?: number;
   customerPoDate: string;
   contractualDeliveryDate?: string;
   completedStagesCount: number;
@@ -506,7 +507,12 @@ export function parseAndValidateCsv(
   const poRefIdx = getColIdx(['Customer PO Ref', 'PO Reference', 'Customer Ref', 'PO Ref', 'PO NO']);
   const poDateIdx = getColIdx(['Customer PO Date', 'PO Date', 'Order Date', 'Date']);
   const delDateIdx = getColIdx(['Contractual Delivery Date', 'Delivery Date', 'Target Delivery Date', 'Promised Date', 'COTD']);
-  const bookedAmtIdx = getColIdx(['Booked Amount', 'BookedAmount', 'Booked Amount ($)', 'Booked Amount (USD)', 'Order Value', 'Amount', 'Value']);
+  const bookedAmtIdx = getColIdx([
+    'Booked Amount', 'BookedAmount', 'Booked_Amount', 'Booked Amt', 'BookedAmt',
+    'Booked Amount ($)', 'Booked Amount (USD)', 'Booked Amount (INR)', 'Booked Amount (Rs)',
+    'Booked Value', 'Order Value', 'PO Value', 'Contract Value', 'PO Amount',
+    'Total Amount', 'Amount', 'Value', 'Price'
+  ]);
   const prodNameIdx = getColIdx(['Product Name', 'Product', 'Product Line', 'Scope', 'Item Description', 'Description', 'Valve Type']);
   const categoryIdx = getColIdx(['Category', 'Product Category']);
   const designTypeIdx = getColIdx(['Design Type', 'Design']);
@@ -620,7 +626,14 @@ export function parseAndValidateCsv(
     const rawPoDate = poDateIdx !== -1 ? row[poDateIdx] : '';
     const poDate = normalizeCsvDate(rawPoDate);
     const rawBookedAmt = bookedAmtIdx !== -1 ? row[bookedAmtIdx]?.trim() : '';
-    const parsedBookedAmt = rawBookedAmt ? parseFloat(rawBookedAmt.replace(/[^0-9.-]+/g, '')) : undefined;
+    let parsedBookedAmt: number | undefined = undefined;
+    if (rawBookedAmt) {
+      const sanitized = rawBookedAmt.replace(/[^0-9.-]+/g, '');
+      const n = parseFloat(sanitized);
+      if (!isNaN(n) && n >= 0) {
+        parsedBookedAmt = n;
+      }
+    }
     const rawProdName = prodNameIdx !== -1 ? row[prodNameIdx]?.trim() : '';
     const productName = rawProdName;
     const rawCategory = categoryIdx !== -1 ? row[categoryIdx]?.trim() : '';
@@ -748,6 +761,7 @@ export function parseAndValidateCsv(
       category,
       designType,
       qty,
+      bookedAmount: parsedBookedAmt,
       customerPoDate: poDate || rawPoDate,
       contractualDeliveryDate: deliveryDate,
       completedStagesCount: effectiveCompletedCount,
@@ -769,6 +783,11 @@ export function parseAndValidateCsv(
           deliveryDate,
           lines: []
         });
+      } else {
+        const existingGroup = poGroups.get(poNumber)!;
+        if ((existingGroup.bookedAmount === undefined || isNaN(existingGroup.bookedAmount)) && parsedBookedAmt !== undefined && !isNaN(parsedBookedAmt)) {
+          existingGroup.bookedAmount = parsedBookedAmt;
+        }
       }
       poGroups.get(poNumber)!.lines.push({
         rowIndex: rowNum,
@@ -823,7 +842,7 @@ export function parseAndValidateCsv(
       const defaultLeadTime = isNew ? 30 : 14;
 
       const effectiveMatOrderDate = rawLine.matOrderDate || rawLine.stageActualDates['sub_supplier_po'] || rawLine.stageActualDates['wo_release'];
-      const effectiveMatExpectedDate = rawLine.matExpectedDate || (effectiveMatOrderDate ? addDays(effectiveMatOrderDate, defaultLeadTime) : undefined);
+      const effectiveMatExpectedDate = rawLine.matExpectedDate || (effectiveMatOrderDate ? addDays(effectiveMatOrderDate, Math.max(0, defaultLeadTime - 1)) : undefined);
       const effectiveMatReceivedDate = rawLine.stageActualDates['material_receipt'] || rawLine.matReceivedDate;
       const effectiveInspectionResult = rawLine.inspectionResult || (effectiveMatReceivedDate ? 'Passed' : 'Pending');
 
@@ -848,7 +867,7 @@ export function parseAndValidateCsv(
         lineMaterials = lineMaterials.map(m => ({
           ...m,
           orderedDate: m.orderedDate || effectiveMatOrderDate,
-          expectedDate: m.expectedDate || effectiveMatExpectedDate || (effectiveMatOrderDate ? addDays(effectiveMatOrderDate, m.leadTimeDays || defaultLeadTime) : undefined),
+          expectedDate: m.expectedDate || effectiveMatExpectedDate || (effectiveMatOrderDate ? addDays(effectiveMatOrderDate, Math.max(0, (m.leadTimeDays || defaultLeadTime) - 1)) : undefined),
           receivedDate: m.receivedDate || (m.isCriticalPath ? effectiveMatReceivedDate : undefined),
           inspectionResult: m.inspectionResult || (effectiveMatReceivedDate ? 'Passed' : m.inspectionResult || 'Pending')
         }));
@@ -940,8 +959,8 @@ export function parseAndValidateCsv(
           // Stage 7 actively waiting for material arrival
           foundFirstPending = true;
           const stageStart = effectiveMatOrderDate;
-          const stageForecastEnd = effectiveMatExpectedDate || addDays(stageStart, m.committedDurationDays);
-          runningChainDate = stageForecastEnd;
+          const stageForecastEnd = effectiveMatExpectedDate || addDays(stageStart, m.committedDurationDays - 1);
+          runningChainDate = addDays(stageForecastEnd, 1);
 
           if (m.committedBaselineEndDate && stageForecastEnd > m.committedBaselineEndDate) {
             delayReason = (rawLine.remarks && rawLine.remarks.trim()) ? rawLine.remarks.trim() : m.name;
@@ -962,8 +981,8 @@ export function parseAndValidateCsv(
           // First active/in-progress milestone after all completed stages
           foundFirstPending = true;
           const stageStart = runningChainDate || todayStr;
-          const stageForecastEnd = addDays(stageStart, m.committedDurationDays);
-          runningChainDate = stageForecastEnd;
+          const stageForecastEnd = addDays(stageStart, m.committedDurationDays - 1);
+          runningChainDate = addDays(stageForecastEnd, 1);
 
           if (m.committedBaselineEndDate && stageForecastEnd > m.committedBaselineEndDate) {
             delayReason = (rawLine.remarks && rawLine.remarks.trim()) ? rawLine.remarks.trim() : m.name;
@@ -983,8 +1002,8 @@ export function parseAndValidateCsv(
         } else {
           // Subsequent future pending stages
           const stageStart = runningChainDate;
-          const stageForecastEnd = addDays(stageStart, m.committedDurationDays);
-          runningChainDate = stageForecastEnd;
+          const stageForecastEnd = addDays(stageStart, m.committedDurationDays - 1);
+          runningChainDate = addDays(stageForecastEnd, 1);
 
           return {
             ...m,
@@ -1040,16 +1059,27 @@ export function parseAndValidateCsv(
       poStatus = 'In Progress';
     }
 
+    let finalActualDeliveryDate: string | undefined = undefined;
+    for (const l of productLines) {
+      const shipMs = l.milestones.find(m => m.stageOrder === 14 || m.key === 'shipment');
+      if (shipMs?.actualEndDate) {
+        finalActualDeliveryDate = shipMs.actualEndDate;
+        break;
+      }
+    }
+
     const newPO: PurchaseOrder = {
       id: poId,
       poNumber: poNum,
       customerName: group.customerName,
       customerPoRef: group.customerPoRef,
       poDate: effectivePoDate,
+      startDate: effectivePoDate,
       bookedAmount: group.bookedAmount,
       contractReviewRef: `CR-IMP-${poNum}`,
       committedDeliveryDate: poDeliveryDate,
       revisedDeliveryDate: finalRevisedDeliveryDate,
+      actualDeliveryDate: allLinesCompleted ? (finalActualDeliveryDate || poDeliveryDate) : finalActualDeliveryDate,
       status: poStatus,
       productLines,
       revisions: [

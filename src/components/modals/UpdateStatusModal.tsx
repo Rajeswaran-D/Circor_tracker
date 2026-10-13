@@ -4,7 +4,7 @@ import type { PurchaseOrder } from '../../types';
 import { ROLE_PERMISSIONS } from '../../types';
 import { X, Wrench, CheckCircle2, Play, Save, AlertTriangle } from 'lucide-react';
 import { getPOManufacturingStatus } from '../../utils/statusUtils';
-import { clampDateMax, todayLocal, getDaysDifference, addDays } from '../../services/calculationEngine';
+import { clampDateMax, todayLocal, getDaysDifference, getMilestoneRevisedDates } from '../../services/calculationEngine';
 
 interface UpdateStatusModalProps {
   isOpen: boolean;
@@ -128,7 +128,7 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
     || (previousMs ? (previousMs.forecastEndDate || previousMs.committedBaselineEndDate) : undefined);
   const currentMs = milestones[selectedMsIndex];
   const currentMsStart = currentMs
-    ? (currentMs.actualStartDate || previousMsActualEnd)
+    ? (currentMs.actualStartDate || currentMs.committedBaselineStartDate || currentMs.forecastStartDate)
     : undefined;
 
   const handleLineSelect = (lineId: string) => {
@@ -137,25 +137,19 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
     const line = po?.productLines.find(l => l.id === lineId);
     const ms = line?.milestones || [];
     const lineActiveMs = ms.find(m => m.status !== 'Completed') || ms[ms.length - 1];
-    const idx = ms.findIndex(m => m.key === lineActiveMs?.key);
-    const prev = idx > 0 ? ms[idx - 1] : undefined;
-    const prevEnd = prev?.actualEndDate
-      || (prev ? (prev.forecastEndDate || prev.committedBaselineEndDate) : undefined);
     setSelectedStageKey(lineActiveMs?.key || 'production');
     setStatusAction('In Progress');
-    setCompletionDate(clampDateMax(prevEnd || lineActiveMs?.committedBaselineStartDate || today, today));
+    const plannedStart = lineActiveMs?.actualStartDate || lineActiveMs?.committedBaselineStartDate || lineActiveMs?.forecastStartDate || today;
+    setCompletionDate(plannedStart);
   };
 
   const handleStageSelect = (stageKey: string) => {
     setSelectedStageKey(stageKey);
     const msIdx = milestones.findIndex(m => m.key === stageKey);
-    const prev = msIdx > 0 ? milestones[msIdx - 1] : undefined;
-    // Authoritative: prefer actualEndDate so chain is pinned to real events
-    const prevActualEnd = prev?.actualEndDate;
-    const prevEnd = prevActualEnd || (prev ? (prev.forecastEndDate || prev.committedBaselineEndDate) : undefined);
     const targetMs = milestones[msIdx];
     if (statusAction === 'In Progress') {
-      setCompletionDate(clampDateMax(prevEnd || targetMs?.committedBaselineStartDate || today, today));
+      const plannedStart = targetMs?.actualStartDate || targetMs?.committedBaselineStartDate || targetMs?.forecastStartDate || today;
+      setCompletionDate(plannedStart);
     } else {
       // Actual completion dates can never be in the future.
       setCompletionDate(clampDateMax(targetMs?.forecastEndDate || targetMs?.committedBaselineEndDate || today, today));
@@ -165,8 +159,8 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
   const handleActionSelect = (action: 'In Progress' | 'Completed') => {
     setStatusAction(action);
     if (action === 'In Progress') {
-      // Start date must be >= previous milestone's end date
-      setCompletionDate(clampDateMax(previousMsEnd || currentMs?.committedBaselineStartDate || today, today));
+      const plannedStart = currentMs?.actualStartDate || currentMs?.committedBaselineStartDate || currentMs?.forecastStartDate || today;
+      setCompletionDate(plannedStart);
     } else {
       setCompletionDate(clampDateMax(currentMs?.forecastEndDate || currentMs?.committedBaselineEndDate || today, today));
     }
@@ -176,12 +170,9 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
     e.preventDefault();
     setErrorMsg('');
 
-    // Chain anchor clamped to today: a previous milestone whose planned end is
-    // in the future must not dead-end the picker (no valid date would exist).
-    const previousMsEndAnchor = previousMsEnd && previousMsEnd <= today ? previousMsEnd : undefined;
-
-    if (statusAction === 'In Progress' && previousMsEndAnchor && completionDate < previousMsEndAnchor) {
-      setErrorMsg(`Start date cannot be earlier than previous milestone's end date (${previousMsEndAnchor}).`);
+    const prevMsFloor = previousMs?.actualEndDate || previousMs?.forecastEndDate || previousMsEnd;
+    if (statusAction === 'In Progress' && prevMsFloor && completionDate < prevMsFloor) {
+      setErrorMsg(`Start date cannot be earlier than previous milestone's end date (${prevMsFloor}).`);
       return;
     }
 
@@ -324,12 +315,13 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
             const bStart = currentMs.committedBaselineStartDate || po.poDate;
             const bEnd = currentMs.committedBaselineEndDate || po.committedDeliveryDate;
             const dur = Math.max(1, currentMs.committedDurationDays || 1);
-            const planDuration = (bStart && bEnd) ? Math.max(1, getDaysDifference(bStart, bEnd)) : dur;
+            const planDuration = (bStart && bEnd) ? Math.max(1, getDaysDifference(bStart, bEnd) + 1) : dur;
 
-            const prevEffectiveEnd = previousMs ? (previousMs.actualEndDate || previousMs.forecastEndDate) : undefined;
-            const revStart = currentMs.actualStartDate || ((bStart && prevEffectiveEnd && prevEffectiveEnd > bStart) ? prevEffectiveEnd : bStart);
-            const startShift = (bStart && revStart && revStart > bStart) ? getDaysDifference(bStart, revStart) : 0;
-            const revEnd = startShift > 0 && revStart ? addDays(revStart, planDuration) : bEnd;
+            // Stable target benchmark from canonical calculation
+            const canonicalDates = getMilestoneRevisedDates(currentMs, previousMs, po.poDate, po.committedDeliveryDate);
+            const revStart = canonicalDates.revisedStart;
+            const revEnd = canonicalDates.revisedEnd;
+            const shiftDays = canonicalDates.shiftDays;
 
             return (
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 text-xs font-mono">
@@ -340,13 +332,13 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
                   </span>
                 </div>
                 <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
-                  <span className={startShift > 0 ? "text-amber-800" : "text-emerald-700"}>
-                    Revised Target: <strong className={startShift > 0 ? "text-amber-950" : "text-emerald-900"}>{revStart} &rarr; {revEnd}</strong>
+                  <span className={shiftDays > 0 ? "text-amber-800" : "text-emerald-700"}>
+                    Revised Target: <strong className={shiftDays > 0 ? "text-amber-950" : "text-emerald-900"}>{revStart} &rarr; {revEnd}</strong>
                   </span>
                   <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
-                    startShift > 0 ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-emerald-50 text-emerald-800 border-emerald-200"
+                    shiftDays > 0 ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-emerald-50 text-emerald-800 border-emerald-200"
                   }`}>
-                    {startShift > 0 ? `+${startShift}d shift from previous delay` : 'On original baseline'}
+                    {shiftDays > 0 ? `+${shiftDays}d shift` : 'On original baseline'}
                   </span>
                 </div>
               </div>
@@ -354,18 +346,43 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
           })()}
 
           {/* Event Date */}
-          <div className="space-y-1.5">
-            <label className="font-bold text-slate-900 flex items-center justify-between">
-              <span>{statusAction === 'Completed' ? 'Completion Date' : 'Start Date'}</span>
-              <span className="text-[10px] font-mono text-slate-500">Delay is calculated automatically</span>
-            </label>
-            <input
-              type="date"
-              value={completionDate || today}
-              onChange={(e) => setCompletionDate(e.target.value)}
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-medium text-slate-900 focus:outline-none focus:border-emerald-600 text-xs font-mono"
-            />
-          </div>
+          {(() => {
+            const prevMsFloor = previousMs?.actualEndDate || previousMs?.forecastEndDate;
+            const minAllowedDate = statusAction === 'In Progress'
+              ? (prevMsFloor || currentMs?.committedBaselineStartDate || po.poDate)
+              : (currentMs?.actualStartDate || prevMsFloor || currentMs?.committedBaselineStartDate || po.poDate);
+            const isDateInvalid = Boolean(minAllowedDate && completionDate && completionDate < minAllowedDate);
+
+            return (
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-900 flex items-center justify-between">
+                  <span>{statusAction === 'Completed' ? 'Completion Date' : 'Start Date'}</span>
+                  <span className="text-[10px] font-mono text-slate-500">Delay is calculated automatically</span>
+                </label>
+                <input
+                  type="date"
+                  min={minAllowedDate}
+                  value={completionDate || today}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    const enforcedVal = (statusAction === 'In Progress' && minAllowedDate && val && val < minAllowedDate)
+                      ? minAllowedDate
+                      : val;
+                    setCompletionDate(enforcedVal);
+                  }}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-medium text-slate-900 focus:outline-none focus:border-emerald-600 text-xs font-mono"
+                />
+                {isDateInvalid && (
+                  <p className="text-[11px] text-rose-600 font-bold mt-1 flex items-center gap-1 font-mono">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    {statusAction === 'In Progress'
+                      ? `Start date cannot be earlier than previous milestone completion (${minAllowedDate}).`
+                      : `Completion date cannot be earlier than start date (${minAllowedDate}).`}
+                  </p>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Select Status Action */}
           <div className="space-y-1.5">
@@ -411,25 +428,54 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
               let totalDelay = 0;
               let netInheritedDelay = 0;
               let newDelayFormed = 0;
+              let resolvedDelayDays = 0;
 
               if (statusAction === 'In Progress') {
-                totalDelay = (baselineStart && completionDate > baselineStart)
-                  ? getDaysDifference(baselineStart, completionDate)
+                const targetStart = (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart)
+                  ? prevEffectiveEnd
+                  : baselineStart;
+                const inheritedShift = (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart)
+                  ? getDaysDifference(baselineStart, prevEffectiveEnd)
                   : 0;
-                netInheritedDelay = (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart)
-                  ? Math.min(totalDelay, getDaysDifference(baselineStart, prevEffectiveEnd))
-                  : 0;
-                newDelayFormed = Math.max(0, totalDelay - netInheritedDelay);
+                netInheritedDelay = inheritedShift;
+                if (targetStart && completionDate > targetStart) {
+                  newDelayFormed = getDaysDifference(targetStart, completionDate);
+                  totalDelay = netInheritedDelay + newDelayFormed;
+                } else if (targetStart && completionDate <= targetStart) {
+                  newDelayFormed = 0;
+                  if (baselineStart && completionDate > baselineStart) {
+                    totalDelay = getDaysDifference(baselineStart, completionDate);
+                    resolvedDelayDays = Math.max(0, netInheritedDelay - totalDelay);
+                  } else {
+                    totalDelay = 0;
+                    resolvedDelayDays = netInheritedDelay;
+                  }
+                } else {
+                  totalDelay = netInheritedDelay;
+                }
               } else {
-                totalDelay = (baselineEnd && completionDate > baselineEnd)
-                  ? getDaysDifference(baselineEnd, completionDate)
-                  : 0;
                 const effectiveStart = currentMs.actualStartDate || ((baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart) ? prevEffectiveEnd : baselineStart);
                 const startDelay = (baselineStart && effectiveStart && effectiveStart > baselineStart)
                   ? getDaysDifference(baselineStart, effectiveStart)
                   : 0;
-                netInheritedDelay = Math.min(totalDelay, startDelay);
-                newDelayFormed = Math.max(0, totalDelay - netInheritedDelay);
+                netInheritedDelay = startDelay;
+                const targetEnd = currentMs.forecastEndDate || (baselineEnd && netInheritedDelay > 0 ? addDays(baselineEnd, netInheritedDelay) : baselineEnd);
+
+                if (targetEnd && completionDate > targetEnd) {
+                  newDelayFormed = getDaysDifference(targetEnd, completionDate);
+                  totalDelay = netInheritedDelay + newDelayFormed;
+                } else if (targetEnd && completionDate <= targetEnd) {
+                  newDelayFormed = 0;
+                  if (baselineEnd && completionDate > baselineEnd) {
+                    totalDelay = getDaysDifference(baselineEnd, completionDate);
+                    resolvedDelayDays = Math.max(0, netInheritedDelay - totalDelay);
+                  } else {
+                    totalDelay = 0;
+                    resolvedDelayDays = netInheritedDelay;
+                  }
+                } else {
+                  totalDelay = netInheritedDelay;
+                }
               }
 
               const prevMilestones = milestones.slice(0, selectedMsIndex);
@@ -481,6 +527,84 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
                       onChange={(e) => setDelayReasonInput(e.target.value)}
                       className="w-full px-3 py-2 bg-white border border-rose-300 rounded-lg text-xs text-slate-900 font-bold focus:outline-none focus:border-rose-600 placeholder:font-normal placeholder:text-rose-400"
                       required
+                    />
+                  </div>
+                );
+              }
+
+              if (totalDelay <= 0) {
+                return (
+                  <div className="space-y-3">
+                    <div className="p-3.5 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-900 text-xs font-semibold flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>
+                          {netInheritedDelay > 0
+                            ? `Schedule Fully Recovered: All prior delay resolved! (+${netInheritedDelay}d recovered at Stage ${currentMs.stageOrder})`
+                            : 'Schedule Status: On Track — Selected date is within planned baseline.'}
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-mono font-bold text-emerald-700 bg-white px-2 py-0.5 rounded border border-emerald-300">
+                        0d Delay
+                      </span>
+                    </div>
+
+                    {netInheritedDelay > 0 && prevDelaysList.length > 0 && (
+                      <div className="p-2 bg-emerald-100/60 border border-emerald-200 rounded-lg space-y-0.5 text-[10px] font-mono text-emerald-900">
+                        <div className="font-bold text-emerald-950">Prior Delay Resolution:</div>
+                        {prevDelaysList.map((m, i) => (
+                          <div key={i} className="truncate">
+                            • Stage {m.stageOrder}: {m.name.replace(/^\d+\.\s*/, '')}: <span className="line-through text-slate-500">+{m.calculatedDelayDays}d</span> <strong className="text-emerald-700">Resolved</strong>
+                          </div>
+                        ))}
+                        <div className="pt-0.5 font-bold text-emerald-950 border-t border-emerald-300/60 flex justify-between">
+                          <span>Net Cumulative Delay:</span>
+                          <span className="text-emerald-700 font-bold">0d (On Time)</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              if (resolvedDelayDays > 0) {
+                return (
+                  <div className="space-y-2 p-3.5 bg-teal-50 border border-teal-300 rounded-xl">
+                    <div className="flex items-center justify-between">
+                      <div className="font-bold text-teal-950 text-xs flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-teal-600" />
+                        <span>Schedule Accelerated: <strong className="text-teal-700 font-mono">+{resolvedDelayDays}d Delay Resolved</strong> (Net delay reduced from +{netInheritedDelay}d to +{totalDelay}d)</span>
+                      </div>
+                      <span className="text-[10px] font-mono font-bold text-teal-900 bg-white px-2 py-0.5 rounded border border-teal-300">
+                        Net Delay: +{totalDelay}d
+                      </span>
+                    </div>
+
+                    {prevDelaysList.length > 0 && (
+                      <div className="p-2 bg-teal-100/50 border border-teal-200 rounded-lg space-y-0.5 text-[10px] font-mono text-teal-900">
+                        <div className="font-bold text-teal-950">Preceding Delay Sources & Resolution:</div>
+                        {prevDelaysList.map((m, i) => (
+                          <div key={i} className="truncate">
+                            • Stage {m.stageOrder}: {m.name.replace(/^\d+\.\s*/, '')}: <strong className="text-rose-700">+{m.calculatedDelayDays}d Delay Added</strong>
+                            {m.delayReason && <span className="text-slate-600 font-normal"> — {m.delayReason}</span>}
+                          </div>
+                        ))}
+                        <div className="truncate text-teal-800 font-semibold">
+                          • Stage {currentMs.stageOrder}: {currentMs.name.replace(/^\d+\.\s*/, '')}: <strong className="text-emerald-700">-{resolvedDelayDays}d Delay Resolved</strong> (Ahead of revised target)
+                        </div>
+                        <div className="pt-0.5 font-bold text-teal-950 border-t border-teal-200 flex justify-between">
+                          <span>Net Cumulative Delay:</span>
+                          <span className="text-amber-800 font-bold">+{totalDelay}d</span>
+                        </div>
+                      </div>
+                    )}
+
+                    <input
+                      type="text"
+                      placeholder="Optional remarks or notes..."
+                      value={delayReasonInput}
+                      onChange={(e) => setDelayReasonInput(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-teal-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:border-teal-600 font-medium placeholder:text-slate-400"
                     />
                   </div>
                 );
@@ -551,13 +675,28 @@ export const UpdateStatusModal: React.FC<UpdateStatusModalProps> = ({
             >
               Cancel
             </button>
-            <button
-              type="submit"
-              className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
-            >
-              <Save className="w-4 h-4 text-emerald-200" />
-              <span>Save Status Update</span>
-            </button>
+            {(() => {
+              const prevMsFloor = previousMs?.actualEndDate || previousMs?.forecastEndDate;
+              const minAllowed = statusAction === 'In Progress'
+                ? (prevMsFloor || currentMs?.committedBaselineStartDate || po.poDate)
+                : (currentMs?.actualStartDate || prevMsFloor || currentMs?.committedBaselineStartDate || po.poDate);
+              const isInvalid = Boolean(minAllowed && completionDate && completionDate < minAllowed);
+
+              return (
+                <button
+                  type="submit"
+                  disabled={isInvalid}
+                  className={`px-5 py-2 rounded-xl font-bold transition-all shadow-md flex items-center gap-1.5 ${
+                    !isInvalid
+                      ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
+                      : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                  }`}
+                >
+                  <Save className="w-4 h-4 text-emerald-200" />
+                  <span>Save Status Update</span>
+                </button>
+              );
+            })()}
           </div>
 
         </form>

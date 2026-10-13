@@ -169,8 +169,8 @@ export const BaselineRevisionModal: React.FC<BaselineRevisionModalProps> = ({
   const masterSchedule = masterMilestones.map((ms, index) => {
     const duration = masterDurations[ms.key] || ms.committedDurationDays;
     const startDate = masterRunningDate;
-    const endDate = addDays(startDate, Math.max(1, duration));
-    masterRunningDate = endDate;
+    const endDate = addDays(startDate, Math.max(1, duration) - 1);
+    masterRunningDate = addDays(endDate, 1);
     return { ...ms, index, durationDays: duration, startDate, endDate };
   });
   const masterCalculatedDeliveryDate = masterSchedule[masterSchedule.length - 1]?.endDate || po.committedDeliveryDate;

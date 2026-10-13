@@ -75,7 +75,7 @@ export const OrderIntakeModule: React.FC = () => {
         maxLeadTime = Math.max(maxLeadTime, 90);
       }
     }
-    return addDays(poStartDate || today, maxLeadTime);
+    return addDays(poStartDate || today, Math.max(0, maxLeadTime - 1));
   };
 
   const deadline = getDeadline();

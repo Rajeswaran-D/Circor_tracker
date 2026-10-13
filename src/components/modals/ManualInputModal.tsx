@@ -38,22 +38,32 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
   // Floor for completion date must only be an actual event (actual start or previous actual end)
   const currentMsStart = currentMilestone.actualStartDate || previousMsActualEnd;
 
+  const dur = Math.max(1, currentMilestone.committedDurationDays || 1);
   const isMaterialStage = currentMilestone.key === 'material_receipt';
   const criticalMat = currentProductLine.materials?.find(m => m.isCriticalPath) || currentProductLine.materials?.[0];
   const matLeadTime = criticalMat?.leadTimeDays || currentMilestone.committedDurationDays || 14;
 
-  const defaultOrderDate = criticalMat?.orderedDate || previousMsActualEnd || currentMilestone.actualStartDate || currentMilestone.committedBaselineStartDate || currentPo.poDate || todayStr;
-  const defaultExpectedDate = criticalMat?.expectedDate || addDays(defaultOrderDate, matLeadTime);
+  const plannedStart = currentMilestone.committedBaselineStartDate || currentMilestone.forecastStartDate || todayStr;
+  const chainedStart = previousMsActualEnd ? addDays(previousMsActualEnd, 1) : undefined;
+  const effectiveTargetStart = (chainedStart && plannedStart && chainedStart > plannedStart)
+    ? chainedStart
+    : plannedStart;
+
+  const defaultOrderDate = criticalMat?.orderedDate || currentMilestone.actualStartDate || effectiveTargetStart;
+  const defaultExpectedDate = criticalMat?.expectedDate || addDays(defaultOrderDate, Math.max(0, matLeadTime - 1));
 
   const rawDefault = eventType === 'start'
-    ? (currentMilestone.actualStartDate || previousMsActualEnd || prevEffectiveEnd || currentMilestone.committedBaselineStartDate || todayStr)
+    ? (currentMilestone.actualStartDate || effectiveTargetStart)
     : isMaterialStage
     ? (currentMilestone.actualEndDate || criticalMat?.receivedDate || defaultExpectedDate || todayStr)
-    : (currentMilestone.actualEndDate || currentMilestone.actualStartDate || previousMsActualEnd || todayStr);
+    : (currentMilestone.actualEndDate || currentMilestone.forecastEndDate || currentMilestone.committedBaselineEndDate || todayStr);
 
   const defaultInitialDate = rawDefault;
 
   const [eventDate, setEventDate] = useState<string>(defaultInitialDate);
+  const [targetEndDate, setTargetEndDate] = useState<string>(
+    currentMilestone.forecastEndDate || addDays(defaultInitialDate, dur - 1)
+  );
   const [backdateReason, setBackdateReason] = useState<string>('');
   const [customDelayReason, setCustomDelayReason] = useState<string>('');
   
@@ -71,20 +81,23 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
 
   useEffect(() => {
     setEventDate(defaultInitialDate);
+    setTargetEndDate(currentMilestone.forecastEndDate || addDays(defaultInitialDate, dur - 1));
     setBackdateReason('');
     setCustomDelayReason('');
     setOrderedDate(defaultOrderDate);
     setExpectedDate(defaultExpectedDate);
     setInspectionResult(criticalMat?.inspectionResult || 'Passed');
     setErrorMessage(null);
-  }, [isOpen, currentMilestone.id, eventType, defaultInitialDate, defaultOrderDate, defaultExpectedDate]);
+  }, [isOpen, currentMilestone.id, eventType, defaultInitialDate, defaultOrderDate, defaultExpectedDate, dur]);
 
   if (!isOpen) return null;
 
   const handleOrderDateChange = (newOrderDate: string) => {
-    setOrderedDate(newOrderDate);
-    if (newOrderDate) {
-      const newExpected = addDays(newOrderDate, matLeadTime);
+    const minFloor = previousMsActualEnd || prevEffectiveEnd || baselineStart;
+    const enforcedDate = (minFloor && newOrderDate && newOrderDate < minFloor) ? minFloor : newOrderDate;
+    setOrderedDate(enforcedDate);
+    if (enforcedDate) {
+      const newExpected = addDays(enforcedDate, Math.max(0, matLeadTime - 1));
       setExpectedDate(newExpected);
       // If completing Stage 7 and received date is default, sync with expected date
       if (eventType === 'complete' && (!eventDate || eventDate === expectedDate || eventDate === defaultExpectedDate)) {
@@ -96,75 +109,126 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
   const isRoleAuthorized = isMilestoneOwnedByRole(currentMilestone.key, activeRole);
   const isPreviousDone = !previousMs || previousMs.status === 'Completed' || Boolean(previousMs.actualEndDate) || previousMs.completionPct === 100;
 
-  const dur = Math.max(1, currentMilestone.committedDurationDays || 1);
   const baselineStart = currentMilestone.committedBaselineStartDate || currentPo.poDate;
   const baselineEnd = currentMilestone.committedBaselineEndDate || currentPo.committedDeliveryDate;
-  const baselineDuration = (baselineStart && baselineEnd) ? Math.max(1, getDaysDifference(baselineStart, baselineEnd)) : dur;
+  const baselineDuration = (baselineStart && baselineEnd) ? Math.max(1, getDaysDifference(baselineStart, baselineEnd) + 1) : dur;
 
-  // Single canonical date calculation across all roles
+  // Single canonical date calculation across all roles - stable target benchmark
   const canonicalDates = getMilestoneRevisedDates(currentMilestone, previousMs, currentPo.poDate, currentPo.committedDeliveryDate);
 
-  let targetRevisedStart = canonicalDates.revisedStart;
-  let targetRevisedEnd = canonicalDates.revisedEnd;
+  const targetRevisedStart = canonicalDates.revisedStart;
+  const targetRevisedEnd = canonicalDates.revisedEnd;
 
-  if (isMaterialStage && orderedDate) {
-    if (orderedDate > baselineStart) {
-      targetRevisedStart = orderedDate;
-      targetRevisedEnd = expectedDate || addDays(orderedDate, matLeadTime);
-    }
-  }
-
-  const precedingStartDelay = (baselineStart && targetRevisedStart && targetRevisedStart > baselineStart)
+  const activeStartShift = (baselineStart && targetRevisedStart && targetRevisedStart > baselineStart)
     ? getDaysDifference(baselineStart, targetRevisedStart)
-    : canonicalDates.shiftDays;
+    : 0;
+  const activeEndShift = (baselineEnd && targetRevisedEnd && targetRevisedEnd > baselineEnd)
+    ? getDaysDifference(baselineEnd, targetRevisedEnd)
+    : 0;
+  const precedingStartDelay = Math.max(activeStartShift, activeEndShift);
+
+  const minAllowedDate = eventType === 'start'
+    ? (previousMsActualEnd || prevEffectiveEnd || baselineStart)
+    : (currentMilestone.actualStartDate || previousMsActualEnd || prevEffectiveEnd || baselineStart);
 
   let totalDelay = 0;
   let inheritedDelayDays = 0;
   let newDelayFormed = 0;
+  let resolvedDelayDays = 0;
   let revisedTarget = '';
 
+  const simulationChainedStart = prevEffectiveEnd ? addDays(prevEffectiveEnd, 1) : undefined;
+  const targetStart = (simulationChainedStart && baselineStart && simulationChainedStart > baselineStart)
+    ? simulationChainedStart
+    : (currentMilestone.forecastStartDate || baselineStart || simulationChainedStart || '');
+
+  inheritedDelayDays = (baselineStart && targetStart && targetStart > baselineStart)
+    ? getDaysDifference(baselineStart, targetStart)
+    : 0;
+
   if (isMaterialStage) {
-    const targetStart = prevEffectiveEnd || baselineStart;
-    const targetDelivery = targetStart ? addDays(targetStart, matLeadTime) : (currentMilestone.forecastEndDate || baselineEnd);
+    const targetDelivery = targetStart ? addDays(targetStart, Math.max(0, matLeadTime - 1)) : (currentMilestone.forecastEndDate || baselineEnd);
     const crossingLine = expectedDate || targetDelivery || baselineEnd;
 
     if (eventType === 'start') {
-      newDelayFormed = (orderedDate && targetStart && orderedDate > targetStart)
-        ? getDaysDifference(targetStart, orderedDate)
-        : 0;
+      if (orderedDate && targetStart && orderedDate > targetStart) {
+        newDelayFormed = getDaysDifference(targetStart, orderedDate);
+        totalDelay = inheritedDelayDays + newDelayFormed;
+      } else if (orderedDate && targetStart && orderedDate <= targetStart) {
+        newDelayFormed = 0;
+        if (baselineStart && orderedDate > baselineStart) {
+          totalDelay = getDaysDifference(baselineStart, orderedDate);
+          resolvedDelayDays = Math.max(0, inheritedDelayDays - totalDelay);
+        } else {
+          totalDelay = 0;
+          resolvedDelayDays = inheritedDelayDays;
+        }
+      } else {
+        totalDelay = inheritedDelayDays;
+      }
       revisedTarget = targetStart || baselineStart || '';
     } else {
       // Expected Delivery Date is the crossing line for Stage 7 delay calculation
-      newDelayFormed = (eventDate && crossingLine && eventDate > crossingLine)
-        ? getDaysDifference(crossingLine, eventDate)
-        : 0;
+      if (eventDate && crossingLine && eventDate > crossingLine) {
+        newDelayFormed = getDaysDifference(crossingLine, eventDate);
+        totalDelay = inheritedDelayDays + newDelayFormed;
+      } else if (eventDate && crossingLine && eventDate <= crossingLine) {
+        newDelayFormed = 0;
+        if (baselineEnd && eventDate > baselineEnd) {
+          totalDelay = getDaysDifference(baselineEnd, eventDate);
+          resolvedDelayDays = Math.max(0, inheritedDelayDays - totalDelay);
+        } else {
+          totalDelay = 0;
+          resolvedDelayDays = inheritedDelayDays;
+        }
+      } else {
+        totalDelay = inheritedDelayDays;
+      }
       revisedTarget = crossingLine || baselineEnd || '';
     }
-
-    inheritedDelayDays = (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart)
-      ? getDaysDifference(baselineStart, prevEffectiveEnd)
-      : 0;
-    totalDelay = inheritedDelayDays + newDelayFormed;
   } else if (eventType === 'start') {
-    const targetStart = prevEffectiveEnd || baselineStart;
-    newDelayFormed = (targetStart && eventDate && eventDate > targetStart)
-      ? getDaysDifference(targetStart, eventDate)
+    const normalEnd = addDays(eventDate, Math.max(1, dur) - 1);
+    const endLateDays = (targetEndDate && normalEnd && targetEndDate > normalEnd)
+      ? getDaysDifference(normalEnd, targetEndDate)
       : 0;
-    inheritedDelayDays = (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart)
-      ? getDaysDifference(baselineStart, prevEffectiveEnd)
-      : 0;
-    totalDelay = inheritedDelayDays + newDelayFormed;
-    revisedTarget = targetStart || baselineStart || '';
+
+    if (targetStart && eventDate && eventDate > targetStart) {
+      const startLateDays = getDaysDifference(targetStart, eventDate);
+      newDelayFormed = startLateDays + endLateDays;
+      totalDelay = inheritedDelayDays + newDelayFormed;
+    } else if (targetStart && eventDate && eventDate <= targetStart) {
+      newDelayFormed = endLateDays;
+      if (endLateDays > 0) {
+        totalDelay = inheritedDelayDays + endLateDays;
+      } else if (baselineStart && eventDate > baselineStart) {
+        totalDelay = getDaysDifference(baselineStart, eventDate);
+        resolvedDelayDays = Math.max(0, inheritedDelayDays - totalDelay);
+      } else {
+        totalDelay = 0;
+        resolvedDelayDays = inheritedDelayDays;
+      }
+    } else {
+      totalDelay = inheritedDelayDays;
+    }
+    revisedTarget = endLateDays > 0 ? targetEndDate : (targetStart || baselineStart || '');
   } else {
-    const effectiveStart = currentMilestone.actualStartDate || (prevEffectiveEnd || baselineStart);
-    const targetEnd = currentMilestone.forecastEndDate || (effectiveStart ? addDays(effectiveStart, dur) : baselineEnd);
-    newDelayFormed = (targetEnd && eventDate && eventDate > targetEnd)
-      ? getDaysDifference(targetEnd, eventDate)
-      : 0;
-    inheritedDelayDays = (baselineStart && prevEffectiveEnd && prevEffectiveEnd > baselineStart)
-      ? getDaysDifference(baselineStart, prevEffectiveEnd)
-      : 0;
-    totalDelay = inheritedDelayDays + newDelayFormed;
+    const effectiveStart = currentMilestone.actualStartDate || targetStart;
+    const targetEnd = currentMilestone.forecastEndDate || (effectiveStart ? addDays(effectiveStart, Math.max(1, dur) - 1) : baselineEnd);
+    if (targetEnd && eventDate && eventDate > targetEnd) {
+      newDelayFormed = getDaysDifference(targetEnd, eventDate);
+      totalDelay = inheritedDelayDays + newDelayFormed;
+    } else if (targetEnd && eventDate && eventDate <= targetEnd) {
+      newDelayFormed = 0;
+      if (baselineEnd && eventDate > baselineEnd) {
+        totalDelay = getDaysDifference(baselineEnd, eventDate);
+        resolvedDelayDays = Math.max(0, inheritedDelayDays - totalDelay);
+      } else {
+        totalDelay = 0;
+        resolvedDelayDays = inheritedDelayDays;
+      }
+    } else {
+      totalDelay = inheritedDelayDays;
+    }
     revisedTarget = targetEnd || baselineEnd || '';
   }
 
@@ -184,8 +248,8 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
 
     const effectiveDocRef = `WO-AUTO-${eventDate.replace(/-/g, '')}`;
 
-    if (eventType === 'start' && previousMsActualEnd && eventDate < previousMsActualEnd) {
-      setErrorMessage(`Start date cannot be earlier than previous milestone's actual end date (${previousMsActualEnd}).`);
+    if (eventType === 'start' && minAllowedDate && eventDate < minAllowedDate) {
+      setErrorMessage(`Start date cannot be earlier than previous milestone completion (${minAllowedDate}).`);
       return;
     }
 
@@ -219,6 +283,7 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
       milestoneKey: currentMilestone.key,
       eventType,
       eventDate,
+      targetEndDate: eventType === 'start' ? targetEndDate : undefined,
       user: `${activeRole} User`,
       docRef: effectiveDocRef,
       backdateReason: isBackdated ? backdateReason : undefined,
@@ -314,7 +379,7 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
                 <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
                   precedingStartDelay > 0 ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-emerald-50 text-emerald-800 border-emerald-200"
                 }`}>
-                  {precedingStartDelay > 0 ? `+${precedingStartDelay}d shift from previous delay` : 'On original baseline'}
+                  {precedingStartDelay > 0 ? `+${precedingStartDelay}d shift` : 'On original baseline'}
                 </span>
               </div>
             </div>
@@ -353,6 +418,7 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
                   </div>
                   <input
                     type="date"
+                    min={previousMsActualEnd || baselineStart}
                     value={orderedDate}
                     onChange={(e) => handleOrderDateChange(e.target.value)}
                     className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-medium focus:outline-none focus:border-emerald-600"
@@ -371,6 +437,7 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
                   </div>
                   <input
                     type="date"
+                    min={orderedDate || previousMsActualEnd || baselineStart}
                     value={expectedDate}
                     onChange={(e) => setExpectedDate(e.target.value)}
                     className="w-full px-3 py-1.5 bg-white border border-emerald-400 rounded-lg text-xs font-mono font-bold text-emerald-950 focus:outline-none focus:border-emerald-600"
@@ -402,10 +469,46 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
             </div>
             <input
               type="date"
+              min={minAllowedDate}
               value={eventDate}
-              onChange={(e) => setEventDate(e.target.value)}
+              onChange={(e) => {
+                const nextVal = e.target.value;
+                const enforcedVal = (eventType === 'start' && minAllowedDate && nextVal && nextVal < minAllowedDate)
+                  ? minAllowedDate
+                  : nextVal;
+                setEventDate(enforcedVal);
+                if (eventType === 'start' && enforcedVal) {
+                  setTargetEndDate(addDays(enforcedVal, Math.max(1, baselineDuration) - 1));
+                }
+              }}
               className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:border-emerald-600 font-medium font-mono"
             />
+            {Boolean(minAllowedDate && eventDate && eventDate < minAllowedDate) && (
+              <p className="text-[11px] text-rose-600 font-bold mt-1 flex items-center gap-1 font-mono">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                {eventType === 'start'
+                  ? `Start date cannot be earlier than previous milestone completion (${minAllowedDate}).`
+                  : `Completion date cannot be earlier than start date (${minAllowedDate}).`}
+              </p>
+            )}
+            {eventType === 'start' && !isMaterialStage && (
+              <div className="mt-3 pt-3 border-t border-slate-200/80">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-slate-700 text-xs">Target / Projected Completion Date</span>
+                  <span className="text-[10px] text-slate-500 font-mono">Duration: {dur}d planned</span>
+                </div>
+                <input
+                  type="date"
+                  min={eventDate || minAllowedDate}
+                  value={targetEndDate}
+                  onChange={(e) => setTargetEndDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs focus:outline-none focus:border-emerald-600 font-medium font-mono"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Baseline duration target is {addDays(eventDate, Math.max(1, baselineDuration) - 1)}. Extend this date if additional execution delay is expected for this stage.
+                </p>
+              </div>
+            )}
             {isMaterialStage && eventType === 'complete' && (
               <p className="text-[11px] text-slate-500 mt-1">
                 Pre-filled with the calculated expected delivery date. Change this date if the material arrived earlier or later (late receival will calculate delay automatically).
@@ -491,6 +594,113 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
                   onChange={(e) => setCustomDelayReason(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-rose-300 rounded-lg text-slate-900 font-bold text-xs focus:outline-none focus:border-rose-600 placeholder:font-normal placeholder:text-rose-400"
                   required
+                />
+              </div>
+            </div>
+          ) : totalDelay <= 0 ? (
+            <div className="space-y-3">
+              <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-900 text-[11px] font-semibold flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>
+                    {inheritedDelayDays > 0 
+                      ? `Schedule Fully Recovered: All prior delay resolved! (+${inheritedDelayDays}d recovered at Stage ${milestone.stageOrder})`
+                      : 'Schedule Status: On Track — Selected date is within planned baseline.'}
+                  </span>
+                </div>
+                <span className="text-[10px] font-mono font-bold text-emerald-700 bg-white px-2 py-0.5 rounded border border-emerald-300">
+                  0d Delay
+                </span>
+              </div>
+
+              {inheritedDelayDays > 0 && (() => {
+                const prevMilestones = (productLine.milestones || []).slice(0, msIndex);
+                const prevDelaysList = prevMilestones
+                  .map((m, mIdx) => {
+                    const prevM = mIdx > 0 ? prevMilestones[mIdx - 1] : null;
+                    const currVar = Math.max(0, typeof m.varianceDays === 'number' ? m.varianceDays : 0);
+                    const prevVar = prevM ? Math.max(0, typeof prevM.varianceDays === 'number' ? prevM.varianceDays : 0) : 0;
+                    const stageDelta = currVar - prevVar;
+                    return { ...m, calculatedDelayDays: stageDelta };
+                  })
+                  .filter(m => m.calculatedDelayDays > 0);
+
+                if (prevDelaysList.length === 0) return null;
+
+                return (
+                  <div className="p-2 bg-emerald-100/60 border border-emerald-200 rounded-lg space-y-0.5 text-[10px] font-mono text-emerald-900">
+                    <div className="font-bold text-emerald-950">Prior Delay Resolution:</div>
+                    {prevDelaysList.map((m, i) => (
+                      <div key={i} className="truncate">
+                        • Stage {m.stageOrder}: {m.name.replace(/^\d+\.\s*/, '')}: <span className="line-through text-slate-500">+{m.calculatedDelayDays}d</span> <strong className="text-emerald-700">Resolved</strong>
+                      </div>
+                    ))}
+                    <div className="pt-0.5 font-bold text-emerald-950 border-t border-emerald-300/60 flex justify-between">
+                      <span>Net Cumulative Delay:</span>
+                      <span className="text-emerald-700 font-bold">0d (On Time)</span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          ) : resolvedDelayDays > 0 ? (
+            <div className="space-y-3">
+              <div className="p-3 bg-teal-50 border border-teal-300 rounded-xl text-teal-950 text-[11px] font-semibold flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
+                  <span>
+                    Schedule Accelerated: <strong className="text-teal-700 font-mono">+{resolvedDelayDays}d Delay Resolved</strong> (Net delay reduced from +{inheritedDelayDays}d to +{totalDelay}d)
+                  </span>
+                </div>
+                <span className="text-[10px] font-mono font-bold text-teal-900 bg-white px-2 py-0.5 rounded border border-teal-300">
+                  Net Delay: +{totalDelay}d
+                </span>
+              </div>
+
+              {(() => {
+                const prevMilestones = (productLine.milestones || []).slice(0, msIndex);
+                const prevDelaysList = prevMilestones
+                  .map((m, mIdx) => {
+                    const prevM = mIdx > 0 ? prevMilestones[mIdx - 1] : null;
+                    const currVar = Math.max(0, typeof m.varianceDays === 'number' ? m.varianceDays : 0);
+                    const prevVar = prevM ? Math.max(0, typeof prevM.varianceDays === 'number' ? prevM.varianceDays : 0) : 0;
+                    const stageDelta = currVar - prevVar;
+                    return { ...m, calculatedDelayDays: stageDelta };
+                  })
+                  .filter(m => m.calculatedDelayDays > 0);
+
+                if (prevDelaysList.length === 0) return null;
+
+                return (
+                  <div className="p-2 bg-teal-100/50 border border-teal-200 rounded-lg space-y-0.5 text-[10px] font-mono text-teal-900">
+                    <div className="font-bold text-teal-950">Preceding Delay Sources & Resolution:</div>
+                    {prevDelaysList.map((m, i) => (
+                      <div key={i} className="truncate">
+                        • Stage {m.stageOrder}: {m.name.replace(/^\d+\.\s*/, '')}: <strong className="text-rose-700">+{m.calculatedDelayDays}d Delay Added</strong>
+                        {m.delayReason && <span className="text-slate-600 font-normal"> — {m.delayReason}</span>}
+                      </div>
+                    ))}
+                    <div className="truncate text-teal-800 font-semibold">
+                      • Stage {milestone.stageOrder}: {milestone.name.replace(/^\d+\.\s*/, '')}: <strong className="text-emerald-700">-{resolvedDelayDays}d Delay Resolved</strong> (Ahead of revised target)
+                    </div>
+                    <div className="pt-0.5 font-bold text-teal-950 border-t border-teal-200 flex justify-between">
+                      <span>Net Cumulative Delay:</span>
+                      <span className="text-amber-800 font-bold">+{totalDelay}d</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="space-y-2">
+                <label className="block text-slate-700 font-medium text-xs">
+                  Optional Notes
+                </label>
+                <input
+                  type="text"
+                  placeholder="Optional notes or remarks (e.g. Schedule accelerated due to overtime)..."
+                  value={customDelayReason}
+                  onChange={(e) => setCustomDelayReason(e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-teal-300 rounded-lg text-slate-800 text-xs focus:outline-none focus:border-teal-600 font-medium"
                 />
               </div>
             </div>
@@ -624,9 +834,9 @@ export const ManualInputModal: React.FC<ManualInputModalProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={!isRoleAuthorized}
+                disabled={!isRoleAuthorized || Boolean(minAllowedDate && eventDate && eventDate < minAllowedDate)}
                 className={`px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-xs ${
-                  isRoleAuthorized
+                  isRoleAuthorized && (!minAllowedDate || !eventDate || eventDate >= minAllowedDate)
                     ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
                     : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                 }`}

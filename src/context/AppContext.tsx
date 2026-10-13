@@ -12,7 +12,8 @@ import type {
   ProductMasterItem,
   Milestone,
   Subdivision,
-  CancellationRequest
+  CancellationRequest,
+  MaterialItem
 } from '../types';
 import { ROLE_PERMISSIONS, isMilestoneOwnedByRole, canRoleManageSubdivision } from '../types';
 import { 
@@ -264,37 +265,89 @@ function repairMilestonesTo14Aligned(
   existingMilestones: Milestone[], 
   poDate: string, 
   lineId: string, 
-  targetEndDate?: string
+  targetEndDate?: string,
+  materials?: MaterialItem[]
 ): Milestone[] {
   const cleanExistingMilestones = existingMilestones || [];
   const start = poDate && isValidDateString(poDate) ? poDate : todayLocal();
-  
-  const defaultTotalDays = ALIGNED_14_STAGES.reduce((sum, s) => sum + s.durationDays, 0);
-  const targetTotalDays = targetEndDate && isValidDateString(targetEndDate)
-    ? Math.max(14, getDaysDifference(start, targetEndDate))
+  const rawMaterialLeadTime = materials && materials.length > 0 
+    ? Math.max(...materials.map(m => m.leadTimeDays)) 
+    : 14;
+
+  // If the product line already has 14 fully initialized milestones with committed baseline dates,
+  // preserve the established baseline schedule without wiping or re-scaling, ensuring consecutive continuity.
+  const hasFullCommitted14 = cleanExistingMilestones.length === 14 && 
+    cleanExistingMilestones.every(m => m.committedBaselineStartDate && m.committedBaselineEndDate);
+
+  if (hasFullCommitted14) {
+    let runningChainDate = start;
+    return ALIGNED_14_STAGES.map((def, idx) => {
+      const existing = cleanExistingMilestones.find(m => m.key === def.key || m.stageOrder === idx + 1) || cleanExistingMilestones[idx];
+      const msStart = idx === 0 ? (existing.committedBaselineStartDate || start) : runningChainDate;
+      const isMatStage = def.key === 'material_receipt' || def.key === 'raw_material';
+      const baseDur = isMatStage && rawMaterialLeadTime > 0
+        ? Math.max(existing.committedDurationDays || def.durationDays, rawMaterialLeadTime)
+        : Math.max(1, existing.committedDurationDays || def.durationDays);
+      const msEnd = existing.committedBaselineEndDate && existing.committedBaselineStartDate === msStart && (!isMatStage || (existing.committedDurationDays || 0) >= rawMaterialLeadTime)
+        ? existing.committedBaselineEndDate
+        : addDays(msStart, baseDur - 1);
+      runningChainDate = addDays(msEnd, 1);
+
+      return {
+        ...existing,
+        id: existing.id || `ms-${lineId}-${def.key}`,
+        key: def.key,
+        name: def.name,
+        stageOrder: idx + 1,
+        committedBaselineStartDate: msStart,
+        committedBaselineEndDate: msEnd,
+        committedDurationDays: baseDur,
+        forecastStartDate: existing.forecastStartDate || existing.actualStartDate || msStart,
+        forecastEndDate: existing.forecastEndDate || existing.actualEndDate || msEnd
+      };
+    });
+  }
+
+  // Otherwise, construct new aligned 14 stages while protecting physical material lead times
+  const rawDurations = ALIGNED_14_STAGES.map(s => {
+    return (s.key === 'material_receipt' || s.key === 'raw_material') && rawMaterialLeadTime > 0
+      ? Math.max(s.durationDays, rawMaterialLeadTime)
+      : s.durationDays;
+  });
+
+  const targetTotalDays = targetEndDate && isValidDateString(targetEndDate) && targetEndDate > start
+    ? Math.max(ALIGNED_14_STAGES.length, getDaysDifference(start, targetEndDate) + 1)
     : null;
+
+  let scaledDurations = [...rawDurations];
+  if (targetTotalDays) {
+    const matIdx = ALIGNED_14_STAGES.findIndex(s => s.key === 'material_receipt');
+    const protectedMat = Math.min(rawMaterialLeadTime, Math.max(1, targetTotalDays - (ALIGNED_14_STAGES.length - 1)));
+    const nonMatRawDays = rawDurations.reduce((sum, d, idx) => idx === matIdx ? sum : sum + d, 0);
+    const remainingTargetDays = Math.max(ALIGNED_14_STAGES.length - 1, targetTotalDays - protectedMat);
+    let allocatedNonMatDays = 0;
+    const nonMatCount = ALIGNED_14_STAGES.length - 1;
+    let nonMatSeen = 0;
+
+    scaledDurations = rawDurations.map((rawD, idx) => {
+      if (idx === matIdx) return protectedMat;
+      nonMatSeen++;
+      if (nonMatSeen === nonMatCount) {
+        return Math.max(1, remainingTargetDays - allocatedNonMatDays);
+      }
+      const prop = Math.max(1, Math.round((rawD / (nonMatRawDays || 1)) * remainingTargetDays));
+      allocatedNonMatDays += prop;
+      return prop;
+    });
+  }
 
   let runningDate = start;
   return ALIGNED_14_STAGES.map((def, idx) => {
     const existing = cleanExistingMilestones.find(m => m.key === def.key || (m.key === 'baseline_review' && def.key === 'pm_baseline') || (m.key === 'qc_pass' && def.key === 'fg') || m.stageOrder === idx + 1);
-    
-    let duration: number;
-    if (targetTotalDays) {
-      if (idx === ALIGNED_14_STAGES.length - 1) {
-        duration = Math.max(1, getDaysDifference(runningDate, targetEndDate!));
-      } else {
-        duration = Math.max(1, Math.round((def.durationDays / defaultTotalDays) * targetTotalDays));
-      }
-    } else {
-      duration = Math.max(1, existing?.committedDurationDays || def.durationDays);
-    }
-    
-    // Baseline start is ALWAYS chained from the previous stage's baseline end (runningDate)
-    const msStart = (idx === 0 && existing?.committedBaselineStartDate) ? existing.committedBaselineStartDate : runningDate;
-    const msEnd = (targetTotalDays && idx === ALIGNED_14_STAGES.length - 1)
-      ? targetEndDate!
-      : addDays(msStart, duration);
-    runningDate = msEnd;
+    const duration = scaledDurations[idx];
+    const msStart = runningDate;
+    const msEnd = addDays(msStart, duration - 1);
+    runningDate = addDays(msEnd, 1);
 
     return {
       id: `ms-${lineId}-${def.key}`,
@@ -322,7 +375,7 @@ function repairMilestonesTo14Aligned(
 
 const normalizeMilestoneFlows = (orders: PurchaseOrder[], todayStr: string): PurchaseOrder[] => orders.map(po => {
   const recalculatedLines = po.productLines.map(line => {
-    const milestones = repairMilestonesTo14Aligned(line.milestones, po.poDate, line.id, po.committedDeliveryDate);
+    const milestones = repairMilestonesTo14Aligned(line.milestones, po.poDate, line.id, po.committedDeliveryDate, line.materials);
     const materials = normalizeMaterialDates(line.materials, todayStr);
 
     const syncedLine = applyMaterialProgress({ ...line, materials, milestones });
@@ -778,7 +831,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           forecastEndDate: ms.actualEndDate || (
             startShift > 0 && bEnd
               ? addDays(bEnd, startShift)
-              : (bEnd || addDays(newStartDate, ms.committedDurationDays))
+              : (bEnd || addDays(newStartDate, ms.committedDurationDays - 1))
           ),
           lastUpdatedBy: user,
           lastUpdatedAt: new Date().toISOString()
@@ -794,7 +847,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const cascadeEnd = ms.actualEndDate || (
           startShift > 0 && bEnd
             ? addDays(bEnd, startShift)
-            : (bEnd || (cascadeStart ? addDays(cascadeStart, ms.committedDurationDays) : ''))
+            : (bEnd || (cascadeStart ? addDays(cascadeStart, ms.committedDurationDays - 1) : ''))
         );
         result[i] = {
           ...ms,
@@ -867,9 +920,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       let newDelayDays = 0;
       let revisedTargetLimit = '';
 
+      const chainedEarliest = prevActualEnd ? addDays(prevActualEnd, 1) : undefined;
+      const targetStart = (baselineStart && chainedEarliest && chainedEarliest > baselineStart)
+        ? chainedEarliest
+        : (ms.forecastStartDate || baselineStart || chainedEarliest || '');
+
       if (isMaterialStage) {
-        const targetStart = (baselineStart && prevActualEnd && prevActualEnd > baselineStart) ? prevActualEnd : (baselineStart || '');
-        const targetDelivery = targetStart ? addDays(targetStart, matLeadTime) : (ms.forecastEndDate || baselineEnd || '');
+        const targetDelivery = targetStart ? addDays(targetStart, Math.max(0, matLeadTime - 1)) : (ms.forecastEndDate || baselineEnd || '');
         const crossingLine = item.expectedDate || targetDelivery || baselineEnd || '';
 
         if (item.eventType === 'start') {
@@ -889,14 +946,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           revisedTargetLimit = crossingLine;
         }
       } else if (item.eventType === 'start') {
-        const targetStart = (baselineStart && prevActualEnd && prevActualEnd > baselineStart)
-          ? prevActualEnd
-          : (baselineStart || '');
         const totalDelay = (baselineStart && item.eventDate > baselineStart)
           ? getDaysDifference(baselineStart, item.eventDate)
           : 0;
-        const inheritedDelay = (baselineStart && prevActualEnd && prevActualEnd > baselineStart)
-          ? Math.min(totalDelay, getDaysDifference(baselineStart, prevActualEnd))
+        const inheritedDelay = (baselineStart && targetStart && targetStart > baselineStart)
+          ? Math.min(totalDelay, getDaysDifference(baselineStart, targetStart))
           : 0;
         newDelayDays = (targetStart && item.eventDate > targetStart)
           ? getDaysDifference(targetStart, item.eventDate)
@@ -904,9 +958,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isNewDelayCausedByStage = newDelayDays > 0;
         revisedTargetLimit = targetStart;
       } else {
-        const effectiveStart = ms.actualStartDate || ((baselineStart && prevActualEnd && prevActualEnd > baselineStart) ? prevActualEnd : baselineStart);
-        const baselineDuration = (baselineStart && baselineEnd) ? Math.max(1, getDaysDifference(baselineStart, baselineEnd)) : duration;
-        const targetEnd = ms.forecastEndDate || (effectiveStart ? addDays(effectiveStart, baselineDuration) : baselineEnd);
+        const effectiveStart = ms.actualStartDate || targetStart;
+        const baselineDuration = (baselineStart && baselineEnd) ? Math.max(1, getDaysDifference(baselineStart, baselineEnd) + 1) : duration;
+        const targetEnd = ms.forecastEndDate || (effectiveStart ? addDays(effectiveStart, baselineDuration - 1) : baselineEnd);
         newDelayDays = (targetEnd && item.eventDate > targetEnd)
           ? getDaysDifference(targetEnd, item.eventDate)
           : 0;
@@ -1001,7 +1055,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (item.eventType === 'start') {
             newMs.actualStartDate = item.eventDate;
             newMs.forecastStartDate = item.eventDate;
-            newMs.forecastEndDate = item.targetEndDate || m.actualEndDate || addDays(item.eventDate, m.committedDurationDays);
+            newMs.forecastEndDate = item.targetEndDate || m.actualEndDate || addDays(item.eventDate, m.committedDurationDays - 1);
             newMs.status = 'In Progress' as MilestoneStatus;
           } else {
             if (!newMs.actualStartDate) {
@@ -1042,7 +1096,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           updatedMaterials = l.materials.map(mat => ({
             ...mat,
             orderedDate: item.orderedDate || mat.orderedDate || (item.eventType === 'start' ? item.eventDate : undefined),
-            expectedDate: item.expectedDate || mat.expectedDate || (item.orderedDate ? addDays(item.orderedDate, mat.leadTimeDays || 14) : undefined),
+            expectedDate: item.expectedDate || mat.expectedDate || (item.orderedDate ? addDays(item.orderedDate, Math.max(0, (mat.leadTimeDays || 14) - 1)) : undefined),
             receivedDate: item.eventType === 'complete' ? (item.receivedDate || item.eventDate) : mat.receivedDate,
             inspectionResult: item.inspectionResult || mat.inspectionResult || (item.eventType === 'complete' ? 'Passed' : mat.inspectionResult || 'Pending')
           }));
@@ -1240,7 +1294,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               updatedMs.status = 'In Progress' as MilestoneStatus;
               updatedMs.actualStartDate = effectiveDate;
               updatedMs.forecastStartDate = effectiveDate;
-              updatedMs.forecastEndDate = ms.actualEndDate || addDays(effectiveDate, ms.committedDurationDays);
+              updatedMs.forecastEndDate = ms.actualEndDate || addDays(effectiveDate, ms.committedDurationDays - 1);
               if (workNotes) updatedMs.docRef = workNotes;
             }
             updatedMs.lastUpdatedBy = user;
@@ -1391,8 +1445,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // (sequence-gated inside the helper so out-of-order data is never
         // fabricated and later wiped by the sequence normalizer).
         const syncedLine = applyMaterialProgress({ ...l, materials: updatedMats });
-
-        const tempLine = { ...syncedLine };
+        const receiptMs = syncedLine.milestones.find(m => m.key === 'material_receipt' || m.key === 'raw_material');
+        let milestonesToCalc = syncedLine.milestones;
+        if (receiptMs && receiptMs.actualEndDate && receiptMs.status === 'Completed') {
+          const rIdx = syncedLine.milestones.findIndex(m => m.id === receiptMs.id);
+          milestonesToCalc = cascadeNextMilestoneStart(syncedLine.milestones, rIdx, receiptMs.actualEndDate, user);
+        }
+        const tempLine = { ...syncedLine, milestones: milestonesToCalc };
         return recalculateProductLine(tempLine, todayStr, config.atRiskThresholdDays, config.delayedThresholdDays);
       });
 
@@ -1509,8 +1568,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const existingMs = line.milestones.find(ms => ms.key === flowMs.key);
             const duration = Math.max(1, flowMs.durationDays);
             const startDate = runningDate;
-            const endDate = addDays(startDate, duration);
-            runningDate = endDate;
+            const endDate = addDays(startDate, duration - 1);
+            runningDate = addDays(endDate, 1);
 
             revisionChangeDetails.push({
               lineId: line.id,
@@ -1593,7 +1652,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const oldDur = ms.committedDurationDays;
           const newDur = change.newDuration;
           const oldEnd = ms.committedBaselineEndDate;
-          const newEnd = addDays(ms.committedBaselineStartDate, newDur);
+          const newEnd = addDays(ms.committedBaselineStartDate, newDur - 1);
 
           revisionChangeDetails.push({
             lineId: line.id,
@@ -1614,8 +1673,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         let runningDate = baselineStartDate || changedMsList[0]?.committedBaselineStartDate || todayStr;
         let updatedMsList = changedMsList.map(ms => {
           const startDate = runningDate;
-          const endDate = addDays(startDate, ms.committedDurationDays);
-          runningDate = endDate;
+          const endDate = addDays(startDate, ms.committedDurationDays - 1);
+          runningDate = addDays(endDate, 1);
           return {
             ...ms,
             committedBaselineStartDate: startDate,

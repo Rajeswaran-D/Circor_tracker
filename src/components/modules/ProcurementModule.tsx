@@ -40,7 +40,7 @@ export const ProcurementModule: React.FC = () => {
   const handleOpenEdit = (po: PurchaseOrder, line: ProductLine, mat: MaterialItem) => {
     const rawMs = line.milestones.find(m => m.key === 'raw_material' || m.key === 'material_receipt');
     const baselineOrder = rawMs?.committedBaselineStartDate || po.poDate;
-    const baselineExpected = addDays(baselineOrder, mat.leadTimeDays || 14);
+    const baselineExpected = addDays(baselineOrder, Math.max(0, (mat.leadTimeDays || 14) - 1));
 
     setSelectedMat({ po, line, mat });
     setOrderedDate(clampDateMax(mat.orderedDate || baselineOrder || '', today));
@@ -151,7 +151,7 @@ export const ProcurementModule: React.FC = () => {
                   const baselineOrderDate = receiptMs?.committedBaselineStartDate || po.poDate;
 
                   return line.materials.map(mat => {
-                    const baselineExpectedDate = addDays(baselineOrderDate, mat.leadTimeDays || 14);
+                    const baselineExpectedDate = addDays(baselineOrderDate, Math.max(0, (mat.leadTimeDays || 14) - 1));
                     const orderShift = mat.orderedDate ? getDaysDifference(baselineOrderDate, mat.orderedDate) : 0;
                     const delivShift = mat.expectedDate ? getDaysDifference(baselineExpectedDate, mat.expectedDate) : 0;
 
@@ -244,7 +244,7 @@ export const ProcurementModule: React.FC = () => {
       {selectedMat && (() => {
         const rawMs = selectedMat.line.milestones.find(m => m.key === 'raw_material' || m.key === 'material_receipt');
         const baselineOrderDate = rawMs?.committedBaselineStartDate || selectedMat.po.poDate;
-        const baselineExpectedDate = addDays(baselineOrderDate, selectedMat.mat.leadTimeDays || 14);
+        const baselineExpectedDate = addDays(baselineOrderDate, Math.max(0, (selectedMat.mat.leadTimeDays || 14) - 1));
         const orderShift = orderedDate ? getDaysDifference(baselineOrderDate, orderedDate) : 0;
         const delivShift = expectedDate ? getDaysDifference(baselineExpectedDate, expectedDate) : 0;
 

@@ -269,14 +269,15 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
 
     const targetLine = purchaseOrders.flatMap(p => p.productLines).find(l => l.milestones.some(m => m.id === milestone.id));
     const criticalMat = targetLine?.materials?.find(m => m.isCriticalPath) || targetLine?.materials?.[0];
-    const defOrderDate = criticalMat?.orderedDate || milestone.actualStartDate || milestone.committedBaselineStartDate || todayStr;
+    const plannedStart = milestone.committedBaselineStartDate || milestone.forecastStartDate || todayStr;
+    const defOrderDate = criticalMat?.orderedDate || milestone.actualStartDate || plannedStart;
     const defLead = criticalMat?.leadTimeDays || 14;
-    const defExpectedDate = criticalMat?.expectedDate || milestone.committedBaselineEndDate || addDays(defOrderDate, defLead);
+    const defExpectedDate = criticalMat?.expectedDate || milestone.committedBaselineEndDate || addDays(defOrderDate, Math.max(0, defLead - 1));
     const defReceivedDate = criticalMat?.receivedDate || milestone.actualEndDate || todayStr;
     const defInspection = criticalMat?.inspectionResult || 'Passed';
 
     setFormData({
-      startDate: milestone.actualStartDate || milestone.forecastStartDate || milestone.committedBaselineStartDate || todayStr,
+      startDate: milestone.actualStartDate || plannedStart,
       endDate: milestone.actualEndDate || milestone.forecastEndDate || milestone.committedBaselineEndDate || todayStr,
       orderedDate: defOrderDate,
       expectedDate: defExpectedDate,
@@ -399,17 +400,20 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
 
     const targetMat = line.materials?.find(m => m.isCriticalPath) || line.materials?.[0];
     const msDur = ms?.committedDurationDays || targetMat?.leadTimeDays || 14;
-    const defOrder = targetMat?.orderedDate || (mode === 'start' ? (ms?.actualStartDate || prevMs?.actualEndDate || ms?.committedBaselineStartDate || todayStr) : (ms?.actualStartDate || ms?.committedBaselineStartDate || todayStr));
-    const defExpected = targetMat?.expectedDate || addDays(defOrder, msDur);
+    const plannedStart = ms?.committedBaselineStartDate || ms?.forecastStartDate || todayStr;
+    const chainedStart = prevMs?.actualEndDate ? addDays(prevMs.actualEndDate, 1) : undefined;
+    const effectivePlannedStart = (chainedStart && plannedStart && chainedStart > plannedStart) ? chainedStart : plannedStart;
+    const defOrder = targetMat?.orderedDate || (mode === 'start' ? (ms?.actualStartDate || effectivePlannedStart) : (ms?.actualStartDate || plannedStart));
+    const defExpected = targetMat?.expectedDate || addDays(defOrder, Math.max(0, msDur - 1));
     const defRec = (mode === 'complete')
       ? (ms?.actualEndDate || targetMat?.receivedDate || todayStr)
       : (targetMat?.receivedDate || '');
     const defInsp = targetMat?.inspectionResult || 'Passed';
 
-    // Initial date: start with previous milestone actual end date if available
+    // Initial date: auto-fill planned/forecast start date
     const defaultDate = mode === 'start'
-      ? (stageKey === 'material_receipt' ? defOrder : (ms?.actualStartDate || prevMs?.actualEndDate || ms?.committedBaselineStartDate || todayStr))
-      : (stageKey === 'material_receipt' ? defRec : (ms?.actualEndDate || ms?.actualStartDate || prevMs?.actualEndDate || todayStr));
+      ? (stageKey === 'material_receipt' ? defOrder : (ms?.actualStartDate || effectivePlannedStart))
+      : (stageKey === 'material_receipt' ? defRec : (ms?.actualEndDate || ms?.forecastEndDate || ms?.committedBaselineEndDate || todayStr));
 
     setBatchModal({
       isOpen: true,
@@ -443,9 +447,12 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
       const idx = (l?.milestones || []).findIndex(m => m.key === stageKey);
       const prev = idx > 0 ? (l?.milestones || [])[idx - 1] : null;
       const targetMs = (l?.milestones || [])[idx];
+      const plannedStart = targetMs?.committedBaselineStartDate || targetMs?.forecastStartDate || todayStr;
+      const chainedStart = prev?.actualEndDate ? addDays(prev.actualEndDate, 1) : undefined;
+      const effectivePlannedStart = (chainedStart && plannedStart && chainedStart > plannedStart) ? chainedStart : plannedStart;
       const targetDate = mode === 'start'
-        ? (targetMs?.actualStartDate || prev?.actualEndDate || targetMs?.committedBaselineStartDate)
-        : (targetMs?.actualEndDate || targetMs?.actualStartDate || prev?.actualEndDate);
+        ? (targetMs?.actualStartDate || effectivePlannedStart)
+        : (targetMs?.actualEndDate || targetMs?.forecastEndDate || targetMs?.committedBaselineEndDate);
       if (targetDate && (!defaultBatchDate || targetDate > defaultBatchDate)) {
         defaultBatchDate = targetDate;
       }
@@ -527,6 +534,17 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
       const targetMs = line.milestones[msIndex];
       const prevMs = msIndex > 0 ? line.milestones[msIndex - 1] : null;
       const prevEnd = prevMs?.actualEndDate || prevMs?.forecastEndDate;
+
+      if (prevEnd && eventType === 'start' && eventDate < prevEnd) {
+        errors.push(`${line.productName}: Start date (${eventDate}) cannot be earlier than previous stage completion (${prevEnd}).`);
+        continue;
+      }
+      const effectiveStartFloor = targetMs.actualStartDate || prevEnd;
+      if (effectiveStartFloor && eventType === 'complete' && eventDate < effectiveStartFloor) {
+        errors.push(`${line.productName}: Completion date (${eventDate}) cannot be earlier than stage start date (${effectiveStartFloor}).`);
+        continue;
+      }
+
       const baselineStart = targetMs.committedBaselineStartDate || targetPO.poDate;
       const baselineEnd = targetMs.committedBaselineEndDate || targetPO.committedDeliveryDate;
       const plannedDuration = targetMs.committedDurationDays || (baselineStart && baselineEnd ? getDaysDifference(baselineStart, baselineEnd) : 1);
@@ -539,8 +557,11 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
           ? mat.leadTimeDays
           : (targetMs.committedDurationDays || 14);
 
-        const targetStart = prevEnd || baselineStart;
-        const targetDelivery = targetStart ? addDays(targetStart, lineLead) : (targetMs.forecastEndDate || baselineEnd);
+        const chainedEarliest = prevEnd ? addDays(prevEnd, 1) : undefined;
+        const targetStart = (chainedEarliest && baselineStart && chainedEarliest > baselineStart)
+          ? chainedEarliest
+          : (targetMs.forecastStartDate || baselineStart || chainedEarliest || '');
+        const targetDelivery = targetStart ? addDays(targetStart, Math.max(0, lineLead - 1)) : (targetMs.forecastEndDate || baselineEnd);
         const crossingLine = batchModal.expectedDate || targetDelivery || baselineEnd;
 
         if (eventType === 'start') {
@@ -556,13 +577,17 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
             : 0;
         }
       } else if (eventType === 'start') {
-        const targetStart = prevEnd || baselineStart;
+        const chainedEarliest = prevEnd ? addDays(prevEnd, 1) : undefined;
+        const targetStart = (chainedEarliest && baselineStart && chainedEarliest > baselineStart)
+          ? chainedEarliest
+          : (targetMs.forecastStartDate || baselineStart || chainedEarliest || '');
         newDelayFormed = (targetStart && eventDate && eventDate > targetStart)
           ? getDaysDifference(targetStart, eventDate)
           : 0;
       } else {
-        const effectiveStart = targetMs.actualStartDate || (prevEnd || baselineStart);
-        const targetEnd = targetMs.forecastEndDate || (effectiveStart ? addDays(effectiveStart, plannedDuration) : baselineEnd);
+        const chainedEarliest = prevEnd ? addDays(prevEnd, 1) : undefined;
+        const effectiveStart = targetMs.actualStartDate || ((chainedEarliest && baselineStart && chainedEarliest > baselineStart) ? chainedEarliest : baselineStart);
+        const targetEnd = targetMs.forecastEndDate || (effectiveStart ? addDays(effectiveStart, Math.max(1, plannedDuration) - 1) : baselineEnd);
         newDelayFormed = (targetEnd && eventDate && eventDate > targetEnd)
           ? getDaysDifference(targetEnd, eventDate)
           : 0;
@@ -1009,7 +1034,8 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                         const currVar = Math.max(0, typeof milestone.varianceDays === 'number' ? milestone.varianceDays : 0);
                         const prevVar = prevMilestone ? Math.max(0, typeof prevMilestone.varianceDays === 'number' ? prevMilestone.varianceDays : 0) : 0;
                         const stageDelta = Math.max(0, currVar - prevVar);
-                        const isNewDelayHere = stageDelta > 0;
+                        const isUnstarted = !isDone && !isStarted;
+                        const isNewDelayHere = !isUnstarted && stageDelta > 0;
                         const hasInheritedShift = currVar > 0 && !isNewDelayHere;
                         const recoveredDays = isDone ? Math.max(0, prevVar - currVar) : 0;
 
@@ -1080,7 +1106,11 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                                         <span>Planned Baseline: <strong className="text-slate-800">{linePlanStart} &rarr; {linePlanEnd}</strong> ({linePlanDuration}d planned)</span>
                                         {lineShiftDays > 0 ? (
                                           <span className="text-[10px] font-bold px-1.5 py-0.2 rounded border bg-amber-50 text-amber-800 border-amber-200">
-                                            +{lineShiftDays}d shift from Stage {prevMilestone?.stageOrder || 'previous'} delay
+                                            {isNewDelayHere && prevVar > 0
+                                              ? `+${prevVar}d shift from Stage ${prevMilestone?.stageOrder || 'previous'} delay (+${stageDelta}d added here)`
+                                              : isNewDelayHere
+                                              ? `+${stageDelta}d delay added at this stage`
+                                              : `+{lineShiftDays}d shift from Stage ${prevMilestone?.stageOrder || 'previous'} delay`}
                                           </span>
                                         ) : (
                                           <span className="text-[10px] font-bold px-1.5 py-0.2 rounded border bg-emerald-50 text-emerald-800 border-emerald-200">
@@ -1213,14 +1243,35 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
 
                             {/* Inline Edit Form for Single Line */}
                             {isEditing && (() => {
-                              const {
-                                revisedStart: msRevStart,
-                                revisedEnd: msRevEnd,
-                                shiftDays: msStartShift,
-                                baselineStart: msPlanStart,
-                                baselineEnd: msPlanEnd,
-                                baselineDuration: msPlanDuration
-                              } = getMilestoneRevisedDates(milestone, prevMilestone, po.poDate, po.committedDeliveryDate);
+                              const canonical = getMilestoneRevisedDates(milestone, prevMilestone, po.poDate, po.committedDeliveryDate);
+                              const msPlanStart = canonical.baselineStart;
+                              const msPlanEnd = canonical.baselineEnd;
+                              const msPlanDuration = canonical.baselineDuration;
+
+                              let msRevStart = canonical.revisedStart;
+                              let msRevEnd = canonical.revisedEnd;
+
+                              if (stageKey === 'material_receipt') {
+                                if (formData.orderedDate) {
+                                  msRevStart = formData.orderedDate;
+                                  msRevEnd = formData.expectedDate || (msRevStart ? addDays(msRevStart, Math.max(0, msPlanDuration - 1)) : canonical.revisedEnd);
+                                }
+                                if (formData.endDate) {
+                                  msRevEnd = formData.endDate;
+                                }
+                              } else {
+                                if (formData.startDate) {
+                                  msRevStart = formData.startDate;
+                                  msRevEnd = formData.endDate || (msRevStart ? addDays(msRevStart, Math.max(1, msPlanDuration) - 1) : canonical.revisedEnd);
+                                }
+                                if (formData.endDate) {
+                                  msRevEnd = formData.endDate;
+                                }
+                              }
+
+                              const startShift = (msPlanStart && msRevStart && msRevStart > msPlanStart) ? getDaysDifference(msPlanStart, msRevStart) : 0;
+                              const endShift = (msPlanEnd && msRevEnd && msRevEnd > msPlanEnd) ? getDaysDifference(msPlanEnd, msRevEnd) : 0;
+                              const msStartShift = Math.max(startShift, endShift);
 
                               return (
                                 <div className="mt-3 p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-4">
@@ -1246,7 +1297,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                                       <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded border ${
                                         msStartShift > 0 ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-emerald-50 text-emerald-800 border-emerald-200"
                                       }`}>
-                                        {msStartShift > 0 ? `+${msStartShift}d shift from previous delay` : 'On original baseline'}
+                                        {msStartShift > 0 ? `+${msStartShift}d shift` : 'On original baseline'}
                                       </span>
                                     </div>
                                   </div>
@@ -1273,11 +1324,13 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                                               type="button"
                                               onClick={() => {
                                                 const lead = line.materials?.[0]?.leadTimeDays || 14;
+                                                const minD = stageOrder > 1 ? (prevMilestone?.actualEndDate || prevMilestone?.forecastEndDate) : null;
+                                                const orderDate = (minD && todayStr < minD) ? minD : todayStr;
                                                 setFormData(prev => ({
                                                   ...prev,
-                                                  orderedDate: todayStr,
-                                                  startDate: todayStr,
-                                                  expectedDate: addDays(todayStr, lead)
+                                                  orderedDate: orderDate,
+                                                  startDate: orderDate,
+                                                  expectedDate: addDays(orderDate, lead)
                                                 }));
                                               }}
                                               className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer"
@@ -1287,9 +1340,12 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                                           </div>
                                           <input
                                             type="date"
+                                            min={stageOrder > 1 ? (prevMilestone?.actualEndDate || prevMilestone?.forecastEndDate || undefined) : undefined}
                                             value={formData.orderedDate || formData.startDate}
                                             onChange={e => {
-                                              const newOrder = e.target.value;
+                                              const val = e.target.value;
+                                              const minD = stageOrder > 1 ? (prevMilestone?.actualEndDate || prevMilestone?.forecastEndDate) : null;
+                                              const newOrder = (minD && val && val < minD) ? minD : val;
                                               const lead = line.materials?.[0]?.leadTimeDays || 14;
                                               const newExp = newOrder ? addDays(newOrder, lead) : formData.expectedDate;
                                               setFormData(prev => ({
@@ -1396,7 +1452,12 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                                           type="date"
                                           min={stageOrder === 1 ? addDays(todayStr, -7) : (prevMilestone?.actualEndDate || prevMilestone?.forecastEndDate || undefined)}
                                           value={formData.startDate}
-                                          onChange={e => setFormData(prev => ({ ...prev, startDate: e.target.value }))}
+                                          onChange={e => {
+                                            const minD = stageOrder === 1 ? addDays(todayStr, -7) : (prevMilestone?.actualEndDate || prevMilestone?.forecastEndDate);
+                                            const val = e.target.value;
+                                            const enforcedVal = (minD && val && val < minD) ? minD : val;
+                                            setFormData(prev => ({ ...prev, startDate: enforcedVal }));
+                                          }}
                                           className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-mono"
                                         />
                                       </div>
@@ -1527,39 +1588,57 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                                   </div>
                                 )}
 
-                                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
-                                  <button
-                                    type="button"
-                                    onClick={() => setEditingKey(null)}
-                                    className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-lg cursor-pointer"
-                                  >
-                                    Cancel
-                                  </button>
-                                  {!milestone.actualStartDate ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleSaveStageUpdate(po.id, line.id, milestone.key, false)}
-                                      className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-lg cursor-pointer flex items-center gap-1 shadow-2xs"
-                                    >
-                                      <Play className="w-3 h-3 fill-current" /> Save & Start Stage
-                                    </button>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleSaveStageUpdate(po.id, line.id, milestone.key, false)}
-                                      className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 text-xs font-semibold rounded-lg cursor-pointer flex items-center gap-1"
-                                    >
-                                      <Edit3 className="w-3.5 h-3.5" /> Save Start Date
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => handleSaveStageUpdate(po.id, line.id, milestone.key, true)}
-                                    className="px-4 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-lg cursor-pointer shadow-xs flex items-center gap-1"
-                                  >
-                                    <CheckCircle2 className="w-3.5 h-3.5" /> Record Complete
-                                  </button>
-                                </div>
+                                {(() => {
+                                  const prevFloor = stageOrder > 1 ? (prevMilestone?.actualEndDate || prevMilestone?.forecastEndDate) : null;
+                                  const isStartInvalid = Boolean(
+                                    stageOrder > 1 && prevFloor && (
+                                      (formData.startDate && formData.startDate < prevFloor) ||
+                                      (formData.orderedDate && formData.orderedDate < prevFloor)
+                                    )
+                                  );
+
+                                  return (
+                                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditingKey(null)}
+                                        className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-lg cursor-pointer"
+                                      >
+                                        Cancel
+                                      </button>
+                                      {!milestone.actualStartDate ? (
+                                        <button
+                                          type="button"
+                                          disabled={isStartInvalid}
+                                          onClick={() => handleSaveStageUpdate(po.id, line.id, milestone.key, false)}
+                                          className={`px-3.5 py-1.5 text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow-2xs ${
+                                            !isStartInvalid ? 'bg-slate-800 hover:bg-slate-900 cursor-pointer' : 'bg-slate-400 cursor-not-allowed'
+                                          }`}
+                                        >
+                                          <Play className="w-3 h-3 fill-current" /> Save & Start Stage
+                                        </button>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          disabled={isStartInvalid}
+                                          onClick={() => handleSaveStageUpdate(po.id, line.id, milestone.key, false)}
+                                          className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1 ${
+                                            !isStartInvalid ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 cursor-pointer' : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                                          }`}
+                                        >
+                                          <Edit3 className="w-3.5 h-3.5" /> Save Start Date
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSaveStageUpdate(po.id, line.id, milestone.key, true)}
+                                        className="px-4 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-lg cursor-pointer shadow-xs flex items-center gap-1"
+                                      >
+                                        <CheckCircle2 className="w-3.5 h-3.5" /> Record Complete
+                                      </button>
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             );
                           })()}
@@ -1858,25 +1937,57 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
 
                 const selectedLeadTime = (selectedMat && typeof selectedMat.leadTimeDays === 'number' && selectedMat.leadTimeDays > 0)
                   ? selectedMat.leadTimeDays
-                  : (selectedMs?.committedDurationDays || selectedMs?.defaultDurationDays || (selectedMs?.committedBaselineStartDate && selectedMs?.committedBaselineEndDate ? getDaysDifference(selectedMs.committedBaselineStartDate, selectedMs.committedBaselineEndDate) : 14));
+                  : (selectedMs?.committedDurationDays || selectedMs?.defaultDurationDays || (selectedMs?.committedBaselineStartDate && selectedMs?.committedBaselineEndDate ? (getDaysDifference(selectedMs.committedBaselineStartDate, selectedMs.committedBaselineEndDate) + 1) : 14));
 
                 const msPlanStart = selectedMs?.committedBaselineStartDate || batchModal.po.poDate;
                 const msPlanEnd = selectedMs?.committedBaselineEndDate || batchModal.po.committedDeliveryDate;
                 const msPlanDuration = stageKey === 'material_receipt'
                   ? selectedLeadTime
-                  : (selectedMs?.committedDurationDays || (msPlanStart && msPlanEnd ? getDaysDifference(msPlanStart, msPlanEnd) : 1));
+                  : (selectedMs?.committedDurationDays || (msPlanStart && msPlanEnd ? (getDaysDifference(msPlanStart, msPlanEnd) + 1) : 1));
 
                 const sampleMsIdx = selectedLine ? selectedLine.milestones.findIndex(m => m.key === stageKey) : -1;
                 const samplePrevMs = sampleMsIdx > 0 ? selectedLine.milestones[sampleMsIdx - 1] : null;
                 const samplePrevEnd = samplePrevMs?.actualEndDate || samplePrevMs?.forecastEndDate;
-                const sampleStartDelay = (msPlanStart && samplePrevEnd && samplePrevEnd > msPlanStart)
-                  ? getDaysDifference(msPlanStart, samplePrevEnd)
-                  : 0;
+                const chainedEarliestStart = samplePrevEnd ? addDays(samplePrevEnd, 1) : undefined;
+                const defaultRevStart = (chainedEarliestStart && msPlanStart && chainedEarliestStart > msPlanStart)
+                  ? chainedEarliestStart
+                  : (selectedMs?.forecastStartDate || selectedMs?.actualStartDate || msPlanStart || '');
 
-                const msRevStart = sampleStartDelay > 0 && samplePrevEnd ? samplePrevEnd : msPlanStart;
-                const msRevEnd = stageKey === 'material_receipt'
-                  ? (msRevStart ? addDays(msRevStart, selectedLeadTime) : msPlanEnd)
-                  : (sampleStartDelay > 0 ? addDays(msRevStart, msPlanDuration) : msPlanEnd);
+                // Canonical stable target benchmark — does not mutate until confirmed
+                const canonicalDates = selectedMs
+                  ? getMilestoneRevisedDates(selectedMs, samplePrevMs, batchModal.po.poDate, batchModal.po.committedDeliveryDate)
+                  : {
+                      revisedStart: defaultRevStart,
+                      revisedEnd: msPlanEnd,
+                      shiftDays: (chainedEarliestStart && msPlanStart && chainedEarliestStart > msPlanStart) ? getDaysDifference(msPlanStart, chainedEarliestStart) : 0
+                    };
+
+                const msRevStart = canonicalDates.revisedStart || defaultRevStart;
+                const msRevEnd = canonicalDates.revisedEnd || msPlanEnd;
+                const sampleShiftDays = canonicalDates.shiftDays;
+
+                const livePO = purchaseOrders.find(p => p.id === batchModal.po?.id) || batchModal.po;
+                const selectedLinesForBatch = livePO
+                  ? livePO.productLines.filter(l => batchModal.selectedLineIds.includes(l.id))
+                  : [];
+                let authoritativePrevEnd = '';
+                selectedLinesForBatch.forEach(l => {
+                  const mIdx = (l.milestones || []).findIndex(ms => ms.key === stageKey);
+                  if (mIdx > 0) {
+                    const prev = l.milestones[mIdx - 1];
+                    const prevEndCandidate = prev?.actualEndDate || prev?.forecastEndDate;
+                    if (prevEndCandidate && (!authoritativePrevEnd || prevEndCandidate > authoritativePrevEnd)) {
+                      authoritativePrevEnd = prevEndCandidate;
+                    }
+                  }
+                });
+                if (!authoritativePrevEnd) {
+                  authoritativePrevEnd = samplePrevEnd || '';
+                }
+
+                const batchMinDate = batchModal.mode === 'start'
+                  ? (authoritativePrevEnd || selectedMs?.committedBaselineStartDate || livePO?.poDate)
+                  : (selectedMs?.actualStartDate || authoritativePrevEnd || selectedMs?.committedBaselineStartDate || livePO?.poDate);
 
                 return (
                   <div>
@@ -1909,14 +2020,17 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                             </div>
                             <input
                               type="date"
+                              min={authoritativePrevEnd || samplePrevEnd || selectedMs?.committedBaselineStartDate || livePO?.poDate}
                               value={batchModal.orderedDate || batchModal.date}
                               onChange={e => {
                                 const val = e.target.value;
-                                const newExp = val ? addDays(val, selectedLeadTime) : batchModal.expectedDate;
+                                const minFloor = authoritativePrevEnd || samplePrevEnd || selectedMs?.committedBaselineStartDate;
+                                const enforcedVal = (minFloor && val && val < minFloor) ? minFloor : val;
+                                const newExp = enforcedVal ? addDays(enforcedVal, selectedLeadTime) : batchModal.expectedDate;
                                 setBatchModal(prev => ({
                                   ...prev,
-                                  orderedDate: val,
-                                  date: prev.mode === 'start' ? val : prev.date,
+                                  orderedDate: enforcedVal,
+                                  date: prev.mode === 'start' ? enforcedVal : prev.date,
                                   expectedDate: newExp || prev.expectedDate
                                 }));
                               }}
@@ -1924,7 +2038,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                             />
                             <div className="flex items-center justify-between text-[10px] mt-0.5 font-mono">
                               <span className="text-slate-500">PO issued to supplier</span>
-                              <span className={sampleStartDelay > 0 ? "text-amber-800 font-bold" : "text-emerald-700 font-bold"}>
+                              <span className={sampleShiftDays > 0 ? "text-amber-800 font-bold" : "text-emerald-700 font-bold"}>
                                 Rev: {msRevStart}
                               </span>
                             </div>
@@ -1941,13 +2055,14 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                             </div>
                             <input
                               type="date"
+                              min={batchModal.orderedDate || batchMinDate}
                               value={batchModal.expectedDate || batchModal.date}
                               onChange={e => setBatchModal(prev => ({ ...prev, expectedDate: e.target.value }))}
                               className="w-full px-2.5 py-1.5 border border-emerald-400 bg-white rounded-lg text-xs font-mono font-bold text-emerald-950 focus:ring-1 focus:ring-emerald-500"
                             />
                             <div className="flex items-center justify-between text-[10px] mt-0.5 font-mono">
                               <span className="text-emerald-800 font-bold bg-emerald-100/70 px-1 rounded">Crossing Line</span>
-                              <span className={sampleStartDelay > 0 ? "text-amber-800 font-bold" : "text-emerald-700 font-bold"}>
+                              <span className={sampleShiftDays > 0 ? "text-amber-800 font-bold" : "text-emerald-700 font-bold"}>
                                 Rev: {msRevEnd}
                               </span>
                             </div>
@@ -1964,6 +2079,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                             </div>
                             <input
                               type="date"
+                              min={batchModal.orderedDate || batchMinDate}
                               value={batchModal.receivedDate || (batchModal.mode === 'complete' ? batchModal.date : '')}
                               onChange={e => setBatchModal(prev => ({
                                 ...prev,
@@ -2023,17 +2139,32 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                             <span className="text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
                               Planned: <strong>{batchModal.mode === 'start' ? msPlanStart : msPlanEnd}</strong>
                             </span>
-                            <span className={sampleStartDelay > 0 ? "text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-bold" : "text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 font-bold"}>
+                            <span className={sampleShiftDays > 0 ? "text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-bold" : "text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 font-bold"}>
                               Revised Target: <strong>{batchModal.mode === 'start' ? msRevStart : msRevEnd}</strong>
                             </span>
                           </div>
                         </div>
                         <input
                           type="date"
+                          min={batchMinDate}
                           value={batchModal.date}
-                          onChange={e => setBatchModal(prev => ({ ...prev, date: e.target.value }))}
+                          onChange={e => {
+                            const val = e.target.value;
+                            const enforcedVal = (batchModal.mode === 'start' && batchMinDate && val && val < batchMinDate)
+                              ? batchMinDate
+                              : val;
+                            setBatchModal(prev => ({ ...prev, date: enforcedVal }));
+                          }}
                           className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs bg-white font-mono font-bold text-slate-800 focus:border-emerald-600"
                         />
+                        {Boolean(batchMinDate && batchModal.date && batchModal.date < batchMinDate) && (
+                          <p className="text-[11px] text-rose-600 font-bold mt-1 flex items-center gap-1 font-mono">
+                            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                            {batchModal.mode === 'start'
+                              ? `Start date cannot be earlier than previous milestone completion (${batchMinDate}).`
+                              : `Completion date cannot be earlier than start date (${batchMinDate}).`}
+                          </p>
+                        )}
                       </div>
                     )}
 
@@ -2045,13 +2176,13 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                         </span>
                       </div>
                       <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
-                        <span className={sampleStartDelay > 0 ? "text-amber-800" : "text-emerald-700"}>
-                          Revised Target: <strong className={sampleStartDelay > 0 ? "text-amber-950" : "text-emerald-900"}>{msRevStart} &rarr; {msRevEnd}</strong>
+                        <span className={sampleShiftDays > 0 ? "text-amber-800" : "text-emerald-700"}>
+                          Revised Target: <strong className={sampleShiftDays > 0 ? "text-amber-950" : "text-emerald-900"}>{msRevStart} &rarr; {msRevEnd}</strong>
                         </span>
                         <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded border ${
-                          sampleStartDelay > 0 ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-emerald-50 text-emerald-800 border-emerald-200"
+                          sampleShiftDays > 0 ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-emerald-50 text-emerald-800 border-emerald-200"
                         }`}>
-                          {sampleStartDelay > 0 ? `+${sampleStartDelay}d shift from previous delay` : 'On original baseline'}
+                          {sampleShiftDays > 0 ? `+${sampleShiftDays}d shift` : 'On original baseline'}
                         </span>
                       </div>
                     </div>
@@ -2061,7 +2192,8 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
 
               {/* Delay Reason & Previous Delays Section */}
               {(() => {
-                const selectedLines = batchModal.po ? batchModal.po.productLines.filter(l => batchModal.selectedLineIds.includes(l.id)) : [];
+                const livePO = purchaseOrders.find(p => p.id === batchModal.po?.id) || batchModal.po;
+                const selectedLines = livePO ? livePO.productLines.filter(l => batchModal.selectedLineIds.includes(l.id)) : [];
                 
                 const allPreviousDelays = selectedLines.flatMap(l => {
                   const idx = (l.milestones || []).findIndex(m => m.key === stageKey);
@@ -2099,6 +2231,8 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                 let maxTotalDelay = 0;
                 let maxNetInheritedDelay = 0;
                 let maxNewDelayFormed = 0;
+                let maxResolvedDelay = 0;
+                let maxNetRemainingDelay = 0;
 
                 selectedLines.forEach(l => {
                   const mIdx = (l.milestones || []).findIndex(ms => ms.key === stageKey);
@@ -2107,14 +2241,21 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                   const prevM = mIdx > 0 ? l.milestones[mIdx - 1] : null;
                   const prevEnd = prevM?.actualEndDate || prevM?.forecastEndDate;
 
-                  const baselineStart = ms.committedBaselineStartDate || batchModal.po?.poDate;
-                  const baselineEnd = ms.committedBaselineEndDate || batchModal.po?.committedDeliveryDate;
+                  const baselineStart = ms.committedBaselineStartDate || livePO?.poDate;
+                  const baselineEnd = ms.committedBaselineEndDate || livePO?.committedDeliveryDate;
 
-                  const plannedDuration = ms.committedDurationDays || (baselineStart && baselineEnd ? getDaysDifference(baselineStart, baselineEnd) : 1);
+                  const plannedDuration = ms.committedDurationDays || (baselineStart && baselineEnd ? (getDaysDifference(baselineStart, baselineEnd) + 1) : 1);
+
+                  // Canonical target dates
+                  const canonical = getMilestoneRevisedDates(ms, prevM, livePO?.poDate, livePO?.committedDeliveryDate);
+                  const canonicalTargetStart = canonical.revisedStart || (prevEnd ? addDays(prevEnd, 1) : baselineStart) || '';
+                  const canonicalTargetEnd = canonical.revisedEnd || (canonicalTargetStart ? addDays(canonicalTargetStart, Math.max(1, plannedDuration) - 1) : baselineEnd) || '';
+                  const inheritedShift = canonical.shiftDays;
 
                   let newDelay = 0;
-                  let inheritedDelay = 0;
-                  let totalDelay = 0;
+                  let inheritedDelay = inheritedShift;
+                  let resolvedDelay = 0;
+                  let netRemainingDelay = 0;
 
                   if (stageKey === 'material_receipt') {
                     const mat = l.materials?.find(m => m.isCriticalPath) || l.materials?.[0];
@@ -2122,76 +2263,189 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                       ? mat.leadTimeDays
                       : (ms.committedDurationDays || 14);
 
-                    const targetStart = prevEnd || baselineStart;
-                    const targetDelivery = targetStart ? addDays(targetStart, lineLead) : (ms.forecastEndDate || baselineEnd);
+                    const chainedEarliest = prevEnd ? addDays(prevEnd, 1) : undefined;
+                    const targetStart = (chainedEarliest && baselineStart && chainedEarliest > baselineStart)
+                      ? chainedEarliest
+                      : (canonicalTargetStart || baselineStart || '');
+                    const targetDelivery = targetStart ? addDays(targetStart, Math.max(0, lineLead - 1)) : (canonicalTargetEnd || baselineEnd);
                     const crossingLine = batchModal.expectedDate || targetDelivery || baselineEnd;
 
                     if (batchModal.mode === 'start') {
                       const orderDate = batchModal.orderedDate || batchModal.date;
-                      newDelay = (orderDate && targetStart && orderDate > targetStart)
-                        ? getDaysDifference(targetStart, orderDate)
-                        : 0;
+                      if (orderDate && targetStart && orderDate > targetStart) {
+                        newDelay = getDaysDifference(targetStart, orderDate);
+                        netRemainingDelay = inheritedDelay + newDelay;
+                      } else if (orderDate && targetStart && orderDate <= targetStart) {
+                        newDelay = 0;
+                        if (baselineStart && orderDate > baselineStart) {
+                          netRemainingDelay = getDaysDifference(baselineStart, orderDate);
+                          resolvedDelay = Math.max(0, inheritedDelay - netRemainingDelay);
+                        } else {
+                          netRemainingDelay = 0;
+                          resolvedDelay = inheritedDelay;
+                        }
+                      } else {
+                        netRemainingDelay = inheritedDelay;
+                      }
                     } else {
-                      // Expected Delivery Date is the crossing line for Stage 7 delay calculation
                       const recDate = batchModal.receivedDate || batchModal.date;
-                      newDelay = (recDate && crossingLine && recDate > crossingLine)
-                        ? getDaysDifference(crossingLine, recDate)
-                        : 0;
+                      if (recDate && crossingLine && recDate > crossingLine) {
+                        newDelay = getDaysDifference(crossingLine, recDate);
+                        netRemainingDelay = inheritedDelay + newDelay;
+                      } else if (recDate && crossingLine && recDate <= crossingLine) {
+                        newDelay = 0;
+                        if (baselineEnd && recDate > baselineEnd) {
+                          netRemainingDelay = getDaysDifference(baselineEnd, recDate);
+                          resolvedDelay = Math.max(0, inheritedDelay - netRemainingDelay);
+                        } else {
+                          netRemainingDelay = 0;
+                          resolvedDelay = inheritedDelay;
+                        }
+                      } else {
+                        netRemainingDelay = inheritedDelay;
+                      }
                     }
-
-                    inheritedDelay = (baselineStart && prevEnd && prevEnd > baselineStart)
-                      ? getDaysDifference(baselineStart, prevEnd)
-                      : 0;
-                    totalDelay = inheritedDelay + newDelay;
                   } else if (batchModal.mode === 'start') {
-                    const targetStart = prevEnd || baselineStart;
-                    newDelay = (targetStart && batchModal.date && batchModal.date > targetStart)
-                      ? getDaysDifference(targetStart, batchModal.date)
-                      : 0;
-                    inheritedDelay = (baselineStart && prevEnd && prevEnd > baselineStart)
-                      ? getDaysDifference(baselineStart, prevEnd)
-                      : 0;
-                    totalDelay = inheritedDelay + newDelay;
+                    const chainedEarliest = prevEnd ? addDays(prevEnd, 1) : undefined;
+                    const targetStart = (chainedEarliest && baselineStart && chainedEarliest > baselineStart)
+                      ? chainedEarliest
+                      : (canonicalTargetStart || baselineStart || '');
+                    const startDate = batchModal.date;
+                    if (targetStart && startDate && startDate > targetStart) {
+                      newDelay = getDaysDifference(targetStart, startDate);
+                      netRemainingDelay = inheritedDelay + newDelay;
+                    } else if (targetStart && startDate && startDate <= targetStart) {
+                      newDelay = 0;
+                      if (baselineStart && startDate > baselineStart) {
+                        netRemainingDelay = getDaysDifference(baselineStart, startDate);
+                        resolvedDelay = Math.max(0, inheritedDelay - netRemainingDelay);
+                      } else {
+                        netRemainingDelay = 0;
+                        resolvedDelay = inheritedDelay;
+                      }
+                    } else {
+                      netRemainingDelay = inheritedDelay;
+                    }
                   } else {
-                    const effectiveStart = ms.actualStartDate || (prevEnd || baselineStart);
-                    const targetEnd = ms.forecastEndDate || (effectiveStart ? addDays(effectiveStart, plannedDuration) : baselineEnd);
-                    newDelay = (targetEnd && batchModal.date && batchModal.date > targetEnd)
-                      ? getDaysDifference(targetEnd, batchModal.date)
-                      : 0;
-                    inheritedDelay = (baselineStart && prevEnd && prevEnd > baselineStart)
-                      ? getDaysDifference(baselineStart, prevEnd)
-                      : 0;
-                    totalDelay = inheritedDelay + newDelay;
+                    const effectiveStart = ms.actualStartDate || (prevEnd ? addDays(prevEnd, 1) : baselineStart);
+                    const targetEnd = canonicalTargetEnd || ms.forecastEndDate || (effectiveStart ? addDays(effectiveStart, Math.max(1, plannedDuration) - 1) : baselineEnd);
+                    const compDate = batchModal.date;
+
+                    if (targetEnd && compDate && compDate > targetEnd) {
+                      newDelay = getDaysDifference(targetEnd, compDate);
+                      netRemainingDelay = inheritedDelay + newDelay;
+                    } else if (targetEnd && compDate && compDate <= targetEnd) {
+                      newDelay = 0;
+                      if (baselineEnd && compDate > baselineEnd) {
+                        netRemainingDelay = getDaysDifference(baselineEnd, compDate);
+                        resolvedDelay = Math.max(0, inheritedDelay - netRemainingDelay);
+                      } else {
+                        netRemainingDelay = 0;
+                        resolvedDelay = inheritedDelay;
+                      }
+                    } else {
+                      netRemainingDelay = inheritedDelay;
+                    }
                   }
 
-                  if (totalDelay > maxTotalDelay) maxTotalDelay = totalDelay;
+                  if (netRemainingDelay > maxNetRemainingDelay) maxNetRemainingDelay = netRemainingDelay;
                   if (inheritedDelay > maxNetInheritedDelay) maxNetInheritedDelay = inheritedDelay;
                   if (newDelay > maxNewDelayFormed) maxNewDelayFormed = newDelay;
+                  if (resolvedDelay > maxResolvedDelay) maxResolvedDelay = resolvedDelay;
                 });
 
+                maxTotalDelay = maxNetRemainingDelay;
+
                 // Preceding delay sources are ONLY shown if this stage actually inherited a delay!
-                // If the delay was resolved at an earlier stage, forthcoming stages have 0 inherited delay and do not display prior resolved delays.
                 const consolidatedPreviousDelays = maxNetInheritedDelay > 0
                   ? Array.from(stageMap.values()).sort((a, b) => a.stageOrder - b.stageOrder)
                   : [];
 
-
-                // 1. NO DELAY AT ALL (0d delay and within baseline schedule)
+                // 1. ALL DELAYS RESOLVED / ON BASELINE SCHEDULE (0d net delay)
                 if (maxTotalDelay <= 0) {
                   return (
-                    <div className="p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center justify-between shadow-2xs">
-                      <div className="flex items-center gap-2 font-medium">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                        <span>Schedule Status: On Track — Selected date is within planned schedule.</span>
+                    <div className="p-3.5 bg-emerald-50 border border-emerald-300 rounded-xl space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 font-bold text-emerald-950 text-[11px]">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>
+                            {maxNetInheritedDelay > 0 
+                              ? `Schedule Fully Recovered: All prior delay resolved! (+${maxNetInheritedDelay}d recovered at Stage ${stageOrder})`
+                              : `Schedule Status: On Track — Selected date is within planned schedule.`}
+                          </span>
+                        </div>
+                        <span className="font-mono font-bold text-emerald-700 text-[10px] bg-white px-2 py-0.5 rounded border border-emerald-300">
+                          0d Delay
+                        </span>
                       </div>
-                      <span className="font-mono font-bold text-emerald-700 text-[10px] bg-white/80 px-2 py-0.5 rounded border border-emerald-200">
-                        0d Delay
-                      </span>
+
+                      {maxNetInheritedDelay > 0 && consolidatedPreviousDelays.length > 0 && (
+                        <div className="p-2 bg-emerald-100/60 border border-emerald-200 rounded-lg space-y-1 text-[10px] font-mono text-emerald-900">
+                          <div className="font-bold text-emerald-950">Prior Delay Resolution:</div>
+                          {consolidatedPreviousDelays.map((d, i) => (
+                            <div key={i} className="truncate">
+                              • Stage {d.stageOrder}: {d.stageName.replace(/^\d+\.\s*/, '')}: <span className="line-through text-slate-500">+{d.addedDelay}d</span> <strong className="text-emerald-700">Resolved</strong>
+                            </div>
+                          ))}
+                          <div className="pt-0.5 font-bold text-emerald-950 border-t border-emerald-300/60 flex justify-between">
+                            <span>Net Cumulative Delay:</span>
+                            <span className="text-emerald-700 font-bold">0d (On Time)</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 }
 
-                // 2. INHERITED DELAY ONLY (This stage did NOT cause a new delay)
+                // 2. PARTIAL DELAY RESOLUTION / SCHEDULE ACCELERATED (Resolved some inherited delay)
+                if (maxResolvedDelay > 0 && maxNetRemainingDelay > 0) {
+                  return (
+                    <div className="p-3.5 bg-teal-50/90 border border-teal-300 rounded-xl space-y-2.5 text-xs">
+                      <div className="flex items-center justify-between">
+                        <div className="font-bold text-teal-950 text-[11px] flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
+                          <span>
+                            Schedule Accelerated: <strong className="text-teal-700 font-mono">+{maxResolvedDelay}d Delay Resolved</strong> (Net delay reduced from +{maxNetInheritedDelay}d to +{maxNetRemainingDelay}d)
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-mono font-bold text-teal-900 bg-white px-2 py-0.5 rounded border border-teal-300">
+                          Net Delay: +{maxNetRemainingDelay}d
+                        </span>
+                      </div>
+
+                      {consolidatedPreviousDelays.length > 0 && (
+                        <div className="p-2 bg-teal-100/50 border border-teal-200 rounded-lg space-y-1 text-[10px] font-mono text-teal-900">
+                          <div className="font-bold text-teal-950">Preceding Delay Sources & Resolution:</div>
+                          {consolidatedPreviousDelays.map((d, i) => (
+                            <div key={i} className="truncate">
+                              • Stage {d.stageOrder}: {d.stageName.replace(/^\d+\.\s*/, '')}: <strong className="text-rose-700">+{d.addedDelay}d Delay Added</strong>
+                              {d.delayReason && <span className="text-slate-600 font-normal"> — {d.delayReason}</span>}
+                            </div>
+                          ))}
+                          <div className="truncate text-teal-800 font-semibold">
+                            • Stage {stageOrder}: {stageTitle.replace(/^\d+\.\s*/, '')}: <strong className="text-emerald-700">-{maxResolvedDelay}d Delay Resolved</strong> (Ahead of revised target)
+                          </div>
+                          <div className="pt-0.5 font-bold text-teal-950 border-t border-teal-200 flex justify-between">
+                            <span>Net Cumulative Delay:</span>
+                            <span className="text-amber-800 font-bold">+{maxNetRemainingDelay}d</span>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="pt-1">
+                        <input
+                          type="text"
+                          placeholder="Optional remarks or notes (e.g. Completed early to recover schedule)..."
+                          value={batchModal.delayReason}
+                          onChange={e => setBatchModal(prev => ({ ...prev, delayReason: e.target.value }))}
+                          className="w-full px-2.5 py-1.5 border border-teal-300 rounded-lg text-xs bg-white font-medium placeholder:text-slate-400"
+                        />
+                      </div>
+                    </div>
+                  );
+                }
+
+                // 3. INHERITED DELAY ONLY (No new delay formed, completed on target)
                 if (maxNewDelayFormed <= 0 && maxNetInheritedDelay > 0) {
                   return (
                     <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl space-y-2.5 text-xs">
@@ -2308,22 +2562,46 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                 >
                   Cancel
                 </button>
-                <button
-                  type="button"
-                  disabled={batchModal.selectedLineIds.length === 0 || !batchModal.date}
-                  onClick={handleExecuteBatch}
-                  className={`px-5 py-2 rounded-xl text-xs font-bold cursor-pointer transition-all shadow-xs flex items-center gap-1.5 ${
-                    batchModal.selectedLineIds.length > 0 && batchModal.date
-                      ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
-                      : 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                  }`}
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  {batchModal.selectedLineIds.length === 1 
-                    ? `Confirm & Record ${batchModal.mode === 'start' ? 'Start' : 'Complete'}`
-                    : `Apply to ${batchModal.selectedLineIds.length} Product Line(s)`
-                  }
-                </button>
+                {(() => {
+                  const livePO = purchaseOrders.find(p => p.id === batchModal.po?.id) || batchModal.po;
+                  const selectedLines = livePO ? livePO.productLines.filter(l => batchModal.selectedLineIds.includes(l.id)) : [];
+                  let highestPrevEnd = '';
+                  selectedLines.forEach(l => {
+                    const mIdx = (l.milestones || []).findIndex(ms => ms.key === stageKey);
+                    if (mIdx > 0) {
+                      const p = l.milestones[mIdx - 1];
+                      const pEnd = p?.actualEndDate || p?.forecastEndDate;
+                      if (pEnd && (!highestPrevEnd || pEnd > highestPrevEnd)) {
+                        highestPrevEnd = pEnd;
+                      }
+                    }
+                  });
+                  const targetMs = selectedLines[0]?.milestones.find(m => m.key === stageKey);
+                  const activeMinFloor = batchModal.mode === 'start'
+                    ? (highestPrevEnd || targetMs?.committedBaselineStartDate || livePO?.poDate)
+                    : (targetMs?.actualStartDate || highestPrevEnd || livePO?.poDate);
+                  const isDateInvalid = Boolean(activeMinFloor && batchModal.date && batchModal.date < activeMinFloor);
+                  const isDisabled = batchModal.selectedLineIds.length === 0 || !batchModal.date || isDateInvalid;
+
+                  return (
+                    <button
+                      type="button"
+                      disabled={isDisabled}
+                      onClick={handleExecuteBatch}
+                      className={`px-5 py-2 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 ${
+                        !isDisabled
+                          ? 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer'
+                          : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                      }`}
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      {batchModal.selectedLineIds.length === 1 
+                        ? `Confirm & Record ${batchModal.mode === 'start' ? 'Start' : 'Complete'}`
+                        : `Apply to ${batchModal.selectedLineIds.length} Product Line(s)`
+                      }
+                    </button>
+                  );
+                })()}
               </div>
             </div>
 

@@ -135,9 +135,10 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
           )
         : 0;
       const delta = currVar - prevVar;
+      const isUnstarted = !ms.actualStartDate && !ms.actualEndDate && ms.status !== 'Completed' && ms.status !== 'In Progress';
       const hasExplicitReason = Boolean(ms.delayReason) && !ms.delayReason?.startsWith('Inherited') && !ms.delayReason?.startsWith('Cascaded');
 
-      if ((delta > 0 && currVar > 0) || (hasExplicitReason && currVar > 0)) {
+      if (!isUnstarted && ((delta > 0 && currVar > 0) || (hasExplicitReason && currVar > 0))) {
         delayOriginEntries.push({
           line: pLine,
           milestone: ms,
@@ -183,7 +184,9 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
   // Delayed stage name matches the actual stage where the delay originated (only if order is delayed)
   const delayedStageName = (delayDays > 0 && rootDelayEntry && rootDelayEntry.varianceDays > 0)
     ? getStageFriendlyName(rootDelayEntry.milestone.key, rootDelayEntry.line)
-    : (delayDays > 0 && activeMilestone ? getStageFriendlyName(activeMilestone.key, line) : undefined);
+    : (delayDays > 0 && activeMilestone && (activeMilestone.actualStartDate || activeMilestone.actualEndDate)
+      ? getStageFriendlyName(activeMilestone.key, line)
+      : (delayDays > 0 && delayOriginEntries[0] ? getStageFriendlyName(delayOriginEntries[0].milestone.key, delayOriginEntries[0].line) : undefined));
 
   const delayReason = delayDays > 0
     ? ((rootDelayEntry?.delayReason && !rootDelayEntry.delayReason.startsWith('Inherited'))

@@ -75,7 +75,7 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
 
     const actualStart = ms.actualStartDate || ms.forecastStartDate;
     const actualEnd = ms.actualEndDate || ms.forecastEndDate;
-    const actualDuration = (actualStart && actualEnd) ? Math.max(1, getDaysDifference(actualStart, actualEnd)) : undefined;
+    const actualDuration = (actualStart && actualEnd) ? Math.max(1, getDaysDifference(actualStart, actualEnd) + 1) : undefined;
 
     // Direct variance at this milestone against its baseline target
     const currentVariance = typeof ms.varianceDays === 'number' ? ms.varianceDays : (
@@ -87,9 +87,10 @@ function extractLineDelayFlow(po: PurchaseOrder, line: ProductLine): {
     const prevActiveVariance = prevMs ? Math.max(0, typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0) : 0;
 
     const delta = activeVariance - prevActiveVariance;
+    const isUnstarted = !ms.actualStartDate && !ms.actualEndDate && ms.status !== 'Completed' && ms.status !== 'In Progress';
 
-    // 1. Stage added new delay days
-    if (delta > 0 && activeVariance > 0) {
+    // 1. Stage added new delay days (only if stage has started or completed work)
+    if (delta > 0 && activeVariance > 0 && !isUnstarted) {
       totalDaysDelayed += delta;
       const step: DelayStep = {
         stageOrder: ms.stageOrder,

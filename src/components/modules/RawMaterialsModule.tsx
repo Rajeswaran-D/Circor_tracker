@@ -265,7 +265,7 @@ export const RawMaterialsModule: React.FC = () => {
                                 const isEditing = editingMat?.matId === mat.id;
                                 const receiptMs = line.milestones.find(m => m.key === 'material_receipt' || m.key === 'raw_material');
                                 const baselineOrderDate = receiptMs?.committedBaselineStartDate || po.poDate;
-                                const baselineExpectedDate = addDays(baselineOrderDate, mat.leadTimeDays || 14);
+                                const baselineExpectedDate = addDays(baselineOrderDate, Math.max(0, (mat.leadTimeDays || 14) - 1));
 
                                 const displayOrderDate = mat.orderedDate || baselineOrderDate;
                                 const displayExpectedDate = mat.expectedDate || baselineExpectedDate;
@@ -372,7 +372,7 @@ export const RawMaterialsModule: React.FC = () => {
                           const currentMat = line.materials.find(m => m.id === editingMat.matId)!;
                           const receiptMs = line.milestones.find(m => m.key === 'material_receipt' || m.key === 'raw_material');
                           const baselineOrderDate = receiptMs?.committedBaselineStartDate || po.poDate;
-                          const baselineExpectedDate = addDays(baselineOrderDate, currentMat.leadTimeDays || 14);
+                          const baselineExpectedDate = addDays(baselineOrderDate, Math.max(0, (currentMat.leadTimeDays || 14) - 1));
                           const activeOrderShift = orderedDate ? getDaysDifference(baselineOrderDate, orderedDate) : 0;
                           const activeDelivShift = expectedDate ? getDaysDifference(baselineExpectedDate, expectedDate) : 0;
 
