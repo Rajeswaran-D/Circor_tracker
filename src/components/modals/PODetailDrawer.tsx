@@ -608,21 +608,33 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
 
                       const allLinesDone = productLineMilestones.length > 0 && productLineMilestones.every(p => p.isLineDone);
 
+                      const isPoCompletedOrClosed = po.status === 'Completed' || po.isClosed;
+                      const isStage1 = ms.key === 'po_from_customer' || ms.stageOrder === 1;
+                      const subsequentStartedOrCompleted = isStage1 && selectedLine.milestones.some((m, idx) => idx > 0 && (Boolean(m.actualStartDate) || Boolean(m.actualEndDate) || m.status === 'Completed'));
+
                       const prevMs = index > 0 ? selectedLine.milestones[index - 1] : null;
                       const currVariance = Math.max(0, typeof ms.varianceDays === 'number' ? ms.varianceDays : 0);
                       const prevVariance = prevMs ? Math.max(0, typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0) : 0;
                       const addedDelayHere = Math.max(0, currVariance - prevVariance);
-                      const isCompleted = ms.status === 'Completed' || Boolean(ms.actualEndDate) || allLinesDone;
+                      const isCompleted = ms.status === 'Completed' || Boolean(ms.actualEndDate) || allLinesDone || isPoCompletedOrClosed || subsequentStartedOrCompleted;
                       const recoveredDelay = isCompleted ? Math.max(0, prevVariance - currVariance) : 0;
                       const isStarted = (Boolean(ms.actualStartDate) || productLineMilestones.some(p => p.isLineStarted)) && !isCompleted;
                       const isInProgress = (isStarted || ms.status === 'In Progress') && !isCompleted;
                       const isPendingBaseline = po.status === 'Baseline Pending';
-                      const activeStageIdx = selectedLine.milestones.findIndex(m => m.status !== 'Completed' && !m.actualEndDate);
-                      const isCurrent = !isPendingBaseline && index === activeStageIdx;
+                      const activeStageIdx = selectedLine.milestones.findIndex(m => {
+                        const mIsStage1 = m.key === 'po_from_customer' || m.stageOrder === 1;
+                        const mSubsequent = mIsStage1 && selectedLine.milestones.some((sub, subIdx) => subIdx > 0 && (Boolean(sub.actualStartDate) || Boolean(sub.actualEndDate) || sub.status === 'Completed'));
+                        const mCompleted = m.status === 'Completed' || Boolean(m.actualEndDate) || isPoCompletedOrClosed || mSubsequent;
+                        return !mCompleted;
+                      });
+                      const isCurrent = !isPendingBaseline && !isPoCompletedOrClosed && index === activeStageIdx;
                       const isUnstarted = !isCompleted && !isInProgress && !isStarted;
                       const isNewDelayFormedAtThisStage = !isUnstarted && addedDelayHere > 0;
                       const hasInheritedShift = currVariance > 0 && !isNewDelayFormedAtThisStage;
                       const friendlyName = getStageFriendlyName(ms.key, selectedLine);
+
+                      const effectiveActualStart = ms.actualStartDate || (isCompleted && isStage1 ? (ms.committedBaselineStartDate || po.poDate) : undefined);
+                      const effectiveActualEnd = ms.actualEndDate || (isCompleted && isStage1 ? (ms.committedBaselineEndDate || ms.committedBaselineStartDate || po.poDate) : undefined);
 
                       const {
                         revisedStart,
@@ -745,23 +757,23 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                               )}
 
                               {/* Actual Execution row (if started or completed) */}
-                              {(Boolean(ms.actualStartDate) || Boolean(ms.actualEndDate) || isCompleted || isStarted) && (
+                              {(Boolean(effectiveActualStart) || Boolean(effectiveActualEnd) || isCompleted || isStarted) && (
                                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1 border-t border-slate-200/60 text-slate-700">
                                   <div>
                                     <span className="text-slate-400 font-semibold uppercase">Actual Start:</span>{' '}
-                                    <strong className={ms.actualStartDate ? "text-blue-700 font-bold" : "text-slate-400"}>
-                                      {ms.actualStartDate || 'Pending'}
+                                    <strong className={effectiveActualStart ? "text-blue-700 font-bold" : "text-slate-400"}>
+                                      {effectiveActualStart || 'Pending'}
                                     </strong>
                                   </div>
                                   <div>
                                     <span className="text-slate-400 font-semibold uppercase">Actual End Date:</span>{' '}
-                                    <strong className={ms.actualEndDate ? "text-emerald-700 font-bold" : "text-slate-400"}>
-                                      {ms.actualEndDate || 'Pending'}
+                                    <strong className={effectiveActualEnd ? "text-emerald-700 font-bold" : "text-slate-400"}>
+                                      {effectiveActualEnd || 'Pending'}
                                     </strong>
                                   </div>
-                                  {isCompleted && ms.actualEndDate && (
+                                  {isCompleted && effectiveActualEnd && (
                                     <div className="text-emerald-700 font-semibold flex items-center gap-1">
-                                      ✓ Passed on {ms.actualEndDate}
+                                      ✓ Passed on {effectiveActualEnd}
                                       {recoveredDelay > 0 && (
                                         <span className="text-emerald-800 font-bold">
                                           • {recoveredDelay === 1 ? '1 day' : `${recoveredDelay} days`} delay resolved

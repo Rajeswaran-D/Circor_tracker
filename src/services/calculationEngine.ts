@@ -203,6 +203,18 @@ export function normalizeLineDates(line: ProductLine, todayStr: string): Product
     if (start && !isValidDateString(start)) start = undefined;
     if (end && !isValidDateString(end)) end = undefined;
 
+    // Stage 1 (Customer Purchase Order) is completed if any downstream stage has started or completed
+    const isStage1 = ms.key === 'po_from_customer' || ms.stageOrder === 1 || i === 0;
+    if (isStage1 && !end) {
+      const hasSubsequentProgress = line.milestones.some((m, idx) =>
+        idx > i && (Boolean(m.actualStartDate) || Boolean(m.actualEndDate) || m.status === 'Completed')
+      );
+      if (hasSubsequentProgress) {
+        start = start || ms.committedBaselineStartDate || todayStr;
+        end = start;
+      }
+    }
+
     if (end && !start) {
       const anchor = chainAnchorDate(normalized, i, todayStr);
       const fallback = anchor && anchor <= end ? anchor : ms.committedBaselineStartDate;

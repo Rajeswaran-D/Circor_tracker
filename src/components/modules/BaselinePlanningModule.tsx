@@ -19,7 +19,11 @@ export const BaselinePlanningModule: React.FC = () => {
     po.productLines.length > 0 &&
     po.productLines.every(line =>
       (line.milestones || []).length > 0 &&
-      line.milestones.every(m => m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100)
+      line.milestones.every((m, mIdx) => {
+        const isStage1 = m.key === 'po_from_customer' || m.stageOrder === 1 || mIdx === 0;
+        const subsequentDone = isStage1 && line.milestones.some((other, oIdx) => oIdx > 0 && (other.status === 'Completed' || Boolean(other.actualEndDate)));
+        return m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100 || subsequentDone;
+      })
     );
 
   const readyForClosingOrders = purchaseOrders.filter(isPOReadyForClosing);
