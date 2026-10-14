@@ -574,7 +574,10 @@ export function recalculateProductLine(
         : (ms.committedBaselineEndDate || addDays(forecastStart, duration - 1))
     );
 
-    if (!ms.actualEndDate) {
+    const hasInPrepSub = ms.subdivisions?.some(s => s.status === 'In Progress');
+    const isActivelyStartedOrInProgress = Boolean(ms.actualStartDate) || Boolean(hasInPrepSub) || ms.status === 'In Progress';
+
+    if (!ms.actualEndDate && isActivelyStartedOrInProgress) {
       if (ms.forecastEndDate && ms.forecastEndDate > forecastEnd) {
         forecastEnd = ms.forecastEndDate;
       }
@@ -637,7 +640,6 @@ export function recalculateProductLine(
     } else {
       const prevMs = msIndex > 0 ? updatedMilestones[msIndex - 1] : undefined;
       const inheritedDelay = prevMs ? Math.max(0, typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0) : 0;
-      const hasInPrepSub = ms.subdivisions?.some(s => s.status === 'In Progress');
 
       if (!ms.actualStartDate && !ms.actualEndDate && !hasInPrepSub) {
         // An unstarted milestone inherits schedule variance strictly from its predecessor.
@@ -658,7 +660,6 @@ export function recalculateProductLine(
     let delayOwner = ms.delayOwner;
 
     const delayedSub = ms.subdivisions?.find(s => s.status === 'Delayed');
-    const hasInPrepSub = ms.subdivisions?.some(s => s.status === 'In Progress');
     const allSubsDone = ms.subdivisions && ms.subdivisions.length > 0 && ms.subdivisions.every(s => s.status === 'Done');
 
     if (delayedSub) {
@@ -916,7 +917,10 @@ export function getMilestoneRevisedDates(
   // 5. Otherwise use baselineEnd.
   let revisedEnd = ms.actualEndDate || '';
   if (!revisedEnd) {
-    if (ms.forecastEndDate && (!baselineEnd || ms.forecastEndDate > baselineEnd)) {
+    const hasInPrepSub = ms.subdivisions?.some(s => s.status === 'In Progress');
+    const isActivelyStartedOrInProgress = Boolean(ms.actualStartDate) || Boolean(hasInPrepSub) || ms.status === 'In Progress';
+
+    if (isActivelyStartedOrInProgress && ms.forecastEndDate && (!baselineEnd || ms.forecastEndDate > baselineEnd)) {
       revisedEnd = ms.forecastEndDate;
     }
     
@@ -932,7 +936,7 @@ export function getMilestoneRevisedDates(
       }
     }
 
-    if (currVar > 0 && baselineEnd) {
+    if (isActivelyStartedOrInProgress && currVar > 0 && baselineEnd) {
       const candidateFromVar = addDays(baselineEnd, currVar);
       if (!revisedEnd || candidateFromVar > revisedEnd) {
         revisedEnd = candidateFromVar;

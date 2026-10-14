@@ -1557,6 +1557,138 @@ const delayLedger18 = extractDelayFlow(poGrp18);
 const hasS8DelayStep = delayLedger18.delaySteps.some(s => s.stageKey === 'machining');
 assert(!hasS8DelayStep, 'Delay Analysis Flow does not contain any false delay step for unstarted Machining');
 
+console.log('\n📋 GROUP 19: Resolved Days Downstream Cascade & Total Delay Recovery');
+
+// Test scenario:
+// Stage 7 completed late by +5d (ended 2026-11-26).
+// Stage 8 baseline: 2026-11-22 -> 2026-12-03 (12d planned). Started 2026-11-27 (+5d startShift).
+// Stage 8 completed early on 2026-12-06, resolving 2 days (variance = +3d).
+// Stage 9 baseline: 2026-12-04 -> 2026-12-07 (4d planned).
+// Stage 10 baseline: 2026-12-08 -> 2026-12-09 (2d planned).
+const testLine19: ProductLine = {
+  id: 'line-grp-19',
+  lineNumber: 'LINE-01',
+  productName: 'Gate Valve Class 600',
+  category: 'Valves',
+  designType: 'Existing Design',
+  qty: 1,
+  materials: [],
+  overallVarianceDays: 5,
+  status: 'Delayed',
+  milestones: [
+    {
+      id: 'ms-7-19',
+      key: 'material_receipt',
+      name: '7. Material Receipt (GRN)',
+      stageOrder: 7,
+      defaultDurationDays: 21,
+      committedBaselineStartDate: '2026-11-01',
+      committedBaselineEndDate: '2026-11-21',
+      committedDurationDays: 21,
+      forecastStartDate: '2026-11-01',
+      forecastEndDate: '2026-11-26',
+      actualStartDate: '2026-11-02',
+      actualEndDate: '2026-11-26',
+      varianceDays: 5,
+      status: 'Completed',
+      completionPct: 100
+    },
+    {
+      id: 'ms-8-19',
+      key: 'machining',
+      name: '8. Machining & Fabrication',
+      stageOrder: 8,
+      defaultDurationDays: 12,
+      committedBaselineStartDate: '2026-11-22',
+      committedBaselineEndDate: '2026-12-03',
+      committedDurationDays: 12,
+      forecastStartDate: '2026-11-27',
+      forecastEndDate: '2026-12-06',
+      actualStartDate: '2026-11-27',
+      actualEndDate: '2026-12-06',
+      varianceDays: 3,
+      status: 'Completed',
+      completionPct: 100
+    },
+    {
+      id: 'ms-9-19',
+      key: 'assembly',
+      name: '9. Assembly',
+      stageOrder: 9,
+      defaultDurationDays: 4,
+      committedBaselineStartDate: '2026-12-04',
+      committedBaselineEndDate: '2026-12-07',
+      committedDurationDays: 4,
+      forecastStartDate: '2026-12-07',
+      forecastEndDate: '2026-12-12', // old +5d
+      varianceDays: 5,                // old +5d
+      status: 'Not Started',
+      completionPct: 0
+    },
+    {
+      id: 'ms-10-19',
+      key: 'finished_goods',
+      name: '10. Finished Goods (FG)',
+      stageOrder: 10,
+      defaultDurationDays: 2,
+      committedBaselineStartDate: '2026-12-08',
+      committedBaselineEndDate: '2026-12-09',
+      committedDurationDays: 2,
+      forecastStartDate: '2026-12-13',
+      forecastEndDate: '2026-12-14', // old +5d
+      varianceDays: 5,
+      status: 'Not Started',
+      completionPct: 0
+    }
+  ]
+};
+
+const recalcedLine19 = recalculateProductLine(testLine19, '2026-12-06', 3, 7);
+const s9Recalced = recalcedLine19.milestones.find(m => m.key === 'assembly')!;
+const s10Recalced = recalcedLine19.milestones.find(m => m.key === 'finished_goods')!;
+
+assert(s9Recalced.forecastStartDate === '2026-12-07', `Stage 9 starts 2026-12-07 following Stage 8 (got ${s9Recalced.forecastStartDate})`);
+assert(s9Recalced.forecastEndDate === '2026-12-10', `Stage 9 completes 2026-12-10 with 4d duration (got ${s9Recalced.forecastEndDate})`);
+assert(s9Recalced.varianceDays === 3, `Stage 9 inherits net +3d variance after 2d resolved (got ${s9Recalced.varianceDays})`);
+
+const s9RevDates = getMilestoneRevisedDates(s9Recalced, recalcedLine19.milestones[1], '2026-11-01', '2026-12-09');
+assert(s9RevDates.shiftDays === 3, `Stage 9 shiftDays is +3d instead of old +5d (got ${s9RevDates.shiftDays})`);
+assert(s9RevDates.revisedStart === '2026-12-07', `Stage 9 revisedStart is 2026-12-07 (got ${s9RevDates.revisedStart})`);
+assert(s9RevDates.revisedEnd === '2026-12-10', `Stage 9 revisedEnd is 2026-12-10 (got ${s9RevDates.revisedEnd})`);
+
+assert(s10Recalced.forecastStartDate === '2026-12-11', `Stage 10 starts 2026-12-11 following Stage 9 (got ${s10Recalced.forecastStartDate})`);
+assert(s10Recalced.forecastEndDate === '2026-12-12', `Stage 10 completes 2026-12-12 (got ${s10Recalced.forecastEndDate})`);
+assert(s10Recalced.varianceDays === 3, `Stage 10 inherits net +3d variance (got ${s10Recalced.varianceDays})`);
+
+const s10RevDates = getMilestoneRevisedDates(s10Recalced, s9Recalced, '2026-11-01', '2026-12-09');
+assert(s10RevDates.shiftDays === 3, `Stage 10 shiftDays is +3d (got ${s10RevDates.shiftDays})`);
+
+assert(recalcedLine19.overallVarianceDays === 3, `Line overallVarianceDays recovers from 5d to 3d (got ${recalcedLine19.overallVarianceDays})`);
+
+const po19: PurchaseOrder = {
+  id: 'po-19',
+  poNumber: 'PO-A',
+  customerName: 'Customer A',
+  customerPoRef: 'REF-19',
+  contractReviewRef: 'CR-19',
+  poDate: '2026-11-01',
+  committedDeliveryDate: '2026-12-09',
+  revisedDeliveryDate: '2026-12-14', // old stored date
+  status: 'Delayed',
+  bookedAmount: 12,
+  isClosed: false,
+  productLines: [recalcedLine19],
+  revisions: [],
+  attachments: [],
+  createdBy: 'Sales',
+  createdAt: '2026-11-01',
+  lastUpdatedBy: 'Production',
+  lastUpdatedAt: '2026-12-06'
+};
+
+const mfgStatus19 = getPOManufacturingStatus(po19);
+assert(mfgStatus19.delayDays === 3, `PO manufacturing status delayDays recovers from 5d to 3d (got ${mfgStatus19.delayDays})`);
+
 console.log('\n================================================================');
 const successRate = totalTests === 0 ? 0 : Math.round((passedTests / totalTests) * 100);
 console.log(`${passedTests === totalTests ? '🎉' : '⚠️'} TEST SUMMARY: ${passedTests}/${totalTests} TESTS PASSED (${successRate}% SUCCESS RATE)`);

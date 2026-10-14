@@ -92,8 +92,18 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
     return Math.max(lineVar, lastMsVar, lastMsDiff, lastDoneVar, lastDoneDiff);
   });
 
-  const poDateDiff = (po.revisedDeliveryDate && po.committedDeliveryDate && po.revisedDeliveryDate > po.committedDeliveryDate)
-    ? getDaysDifference(po.committedDeliveryDate, po.revisedDeliveryDate)
+  const maxFinalLineEnd = (po.productLines && po.productLines.length > 0)
+    ? po.productLines.reduce((latest, l) => {
+        const lastMs = (l.milestones || []).slice(-1)[0];
+        const end = lastMs?.actualEndDate || lastMs?.forecastEndDate || lastMs?.committedBaselineEndDate;
+        if (!latest) return end || '';
+        return end && end > latest ? end : latest;
+      }, '')
+    : '';
+  const effectiveRevisedDeliveryDate = maxFinalLineEnd || po.revisedDeliveryDate;
+
+  const poDateDiff = (effectiveRevisedDeliveryDate && po.committedDeliveryDate && effectiveRevisedDeliveryDate > po.committedDeliveryDate)
+    ? getDaysDifference(po.committedDeliveryDate, effectiveRevisedDeliveryDate)
     : 0;
 
   const actualDeliveryDiff = (po.actualDeliveryDate && po.committedDeliveryDate && po.actualDeliveryDate > po.committedDeliveryDate)

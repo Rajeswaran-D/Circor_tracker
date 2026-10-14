@@ -1110,7 +1110,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                                               ? `+${prevVar}d shift from Stage ${prevMilestone?.stageOrder || 'previous'} delay (+${stageDelta}d added here)`
                                               : isNewDelayHere
                                               ? `+${stageDelta}d delay added at this stage`
-                                              : `+{lineShiftDays}d shift from Stage ${prevMilestone?.stageOrder || 'previous'} delay`}
+                                              : `+${lineShiftDays}d shift from Stage ${prevMilestone?.stageOrder || 'previous'} delay`}
                                           </span>
                                         ) : (
                                           <span className="text-[10px] font-bold px-1.5 py-0.2 rounded border bg-emerald-50 text-emerald-800 border-emerald-200">

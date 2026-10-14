@@ -383,9 +383,17 @@ const normalizeMilestoneFlows = (orders: PurchaseOrder[], todayStr: string): Pur
     return recalculateProductLine(syncedLine, todayStr, atRisk, delayed);
   });
 
+  const maxFinalForecast = recalculatedLines.reduce((latest, l) => {
+    const lastMs = (l.milestones || []).slice(-1)[0];
+    const end = lastMs?.actualEndDate || lastMs?.forecastEndDate || lastMs?.committedBaselineEndDate;
+    if (!latest) return end || '';
+    return end && end > latest ? end : latest;
+  }, '');
+
   return {
     ...po,
     productLines: recalculatedLines,
+    revisedDeliveryDate: (maxFinalForecast && maxFinalForecast > po.committedDeliveryDate) ? maxFinalForecast : po.committedDeliveryDate,
     status: po.isCancelled || po.status === 'Cancelled'
       ? 'Cancelled'
       : po.isClosed ? 'Closed' : po.status === 'Baseline Pending' ? 'Baseline Pending' : getPurchaseOrderStatus(recalculatedLines, po.isClosed)
