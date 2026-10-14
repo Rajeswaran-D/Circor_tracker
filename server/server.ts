@@ -85,7 +85,10 @@ function getOrgId(req: Request): string {
   return (req.headers['x-organization-id'] as string) || DEFAULT_ORG_ID;
 }
 
-// Background sync to MySQL when state changes
+// Background sync to MySQL when state changes.
+// NOTE: shared-state sync is UPSERT-only by design (it cannot express deletes).
+// Order deletes go through DELETE /api/orders/:id -> deleteOrderFromDb.
+// This function must therefore never resurrect rows and only reports errors.
 async function syncStateToMySql(orgId: string, update: Record<string, unknown>): Promise<void> {
   const pool = await getDbPool();
   if (!pool) return;
@@ -158,7 +161,14 @@ app.get('/api/shared-state', async (req: Request, res: Response) => {
       ]);
 
       const mergedState: Record<string, unknown> = { ...memoryState };
-      if (orders && orders.length > 0) mergedState.cft_pos = orders;
+      // MySQL is authoritative for orders when reachable. Memory may still hold
+      // rows deleted via DELETE /api/orders/:id in another tab/process, so always
+      // take the DB list (even when empty) instead of keeping stale memory rows.
+      // Other collections keep the old non-empty guard to avoid clobbering local
+      // edits when a loader transiently fails.
+      if (orders) {
+        mergedState.cft_pos = orders;
+      }
       if (products && products.length > 0) mergedState.cft_products = products;
       if (templates && templates.length > 0) mergedState.cft_templates = templates;
       if (audit && audit.length > 0) mergedState.cft_audit = audit;
@@ -212,11 +222,12 @@ app.get('/api/orders', async (req: Request, res: Response) => {
     const pool = await getDbPool();
     if (pool) {
       try {
+        // DB is authoritative (even when empty) so deleted orders never reappear
+        // from a stale memory/file snapshot.
         const orders = await loadOrdersFromDb(pool, orgId);
-        if (orders.length > 0) {
-          res.json(orders);
-          return;
-        }
+        memoryState.cft_pos = orders;
+        res.json(orders);
+        return;
       } catch {}
     }
     const orders = (memoryState.cft_pos as PurchaseOrder[]) || [];
@@ -302,24 +313,39 @@ app.put('/api/orders/:id', async (req: Request, res: Response) => {
 app.delete('/api/orders/:id', async (req: Request, res: Response) => {
   try {
     const orgId = getOrgId(req);
-    const currentOrders = (memoryState.cft_pos as PurchaseOrder[]) || [];
-    const filtered = currentOrders.filter(o => o.id !== req.params.id);
-
-    memoryState.cft_pos = filtered;
-    scheduleStateSave();
-
-    // Delete from MySQL as well — memory-only delete resurrects on reload.
     const pool = await getDbPool();
     if (pool) {
       try {
-        await deleteOrderFromDb(pool, orgId, req.params.id);
+        const deleted = await deleteOrderFromDb(pool, orgId, req.params.id);
+        // Refresh authoritative memory from MySQL so every tab converges.
+        try {
+          memoryState.cft_pos = await loadOrdersFromDb(pool, orgId);
+        } catch {
+          memoryState.cft_pos = ((memoryState.cft_pos as PurchaseOrder[]) || [])
+            .filter(o => o.id !== req.params.id);
+        }
+        scheduleStateSave();
+        if (!deleted) {
+          res.status(404).json({ error: 'Order not found' });
+          return;
+        }
+        res.status(204).end();
+        return;
       } catch (err: any) {
-        res.status(502).json({ error: `Memory updated but MySQL delete failed: ${err.message}` });
+        res.status(502).json({ error: `MySQL delete failed: ${err.message}` });
         return;
       }
     }
 
-    void syncStateToMySql(orgId, { cft_pos: filtered });
+    // Offline/memory fallback (no MySQL): prune memory + file only.
+    const currentOrders = (memoryState.cft_pos as PurchaseOrder[]) || [];
+    const filtered = currentOrders.filter(o => o.id !== req.params.id);
+    if (filtered.length === currentOrders.length) {
+      res.status(404).json({ error: 'Order not found' });
+      return;
+    }
+    memoryState.cft_pos = filtered;
+    scheduleStateSave();
     res.status(204).end();
   } catch (err: any) {
     res.status(500).json({ error: err.message });
