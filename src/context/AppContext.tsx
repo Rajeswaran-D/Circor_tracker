@@ -188,6 +188,7 @@ interface AppContextType {
 
   // Permission helper (derived from activeRole + ROLE_PERMISSIONS)
   canDo: (action: keyof typeof ROLE_PERMISSIONS[Role]) => boolean;
+  backendStatus: 'connected' | 'offline' | 'mysql';
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -571,6 +572,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isOffline, setIsOffline] = useState<boolean>(!navigator.onLine);
   const [showBlueprintModal, setShowBlueprintModal] = useState<boolean>(false);
   const [sharedStateReady, setSharedStateReady] = useState(true);
+  const [backendStatus, setBackendStatus] = useState<'connected' | 'offline' | 'mysql'>('connected');
 
   // Echo-guard: the serialized value last pushed to localStorage/server per key.
   // Prevents the 2s server poll from applying our own data back over newer
@@ -658,8 +660,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         if (!response.ok) {
           setSharedStateReady(true);
+          setBackendStatus('offline');
           return;
         }
+        setBackendStatus('connected');
         const sharedState = await response.json() as Record<string, unknown>;
         Object.entries(sharedState).forEach(([key, value]) => {
           if (!sharedStateKeys.some(storageKey => storageKey === key)) return;
@@ -696,6 +700,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch {
         // Local storage remains the offline fallback.
         setSharedStateReady(true);
+        setBackendStatus('offline');
       }
     };
 
@@ -2488,7 +2493,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addSubdivision,
       updateSubdivision,
       deleteSubdivision,
-      canDo
+      canDo,
+      backendStatus
     }}>
       {children}
     </AppContext.Provider>
