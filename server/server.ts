@@ -6,11 +6,12 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
-import { getDbPool, isDbConnected } from './db';
+import { getDbPool, isDbConnected, getSafeDbConfig, closeDbPool } from './db';
 import {
   initSchema,
   saveOrdersToDb,
   loadOrdersFromDb,
+  deleteOrderFromDb,
   saveProductsToDb,
   loadProductsFromDb,
   saveAuditLogsToDb,
@@ -121,12 +122,16 @@ async function syncStateToMySql(orgId: string, update: Record<string, unknown>):
 // ---------------------------------------------------------------------------
 
 app.get('/api/health', async (_req: Request, res: Response) => {
+  // Re-validates the pool so the endpoint never falsely claims MySQL is connected.
+  await getDbPool();
+  const dbConnected = isDbConnected();
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    dbConnected: isDbConnected(),
-    storageProvider: isDbConnected() ? 'mysql' : 'memory-with-file-sync',
-    uptime: process.uptime()
+    dbConnected,
+    storageProvider: dbConnected ? 'mysql' : 'memory-with-file-sync',
+    uptime: process.uptime(),
+    db: getSafeDbConfig()
   });
 });
 
@@ -223,6 +228,21 @@ app.get('/api/orders', async (req: Request, res: Response) => {
 
 app.get('/api/orders/:id', async (req: Request, res: Response) => {
   try {
+    const orgId = getOrgId(req);
+    // Prefer MySQL when available so a restart/reload reflects committed rows.
+    const pool = await getDbPool();
+    if (pool) {
+      try {
+        const orders = await loadOrdersFromDb(pool, orgId);
+        const found = orders.find(p => p.id === req.params.id || p.poNumber === req.params.id);
+        if (found) {
+          res.json(found);
+          return;
+        }
+      } catch {
+        // Fall through to memory below; DB errors must not mask memory state.
+      }
+    }
     const orders = (memoryState.cft_pos as PurchaseOrder[]) || [];
     const found = orders.find(p => p.id === req.params.id || p.poNumber === req.params.id);
     if (!found) {
@@ -287,6 +307,17 @@ app.delete('/api/orders/:id', async (req: Request, res: Response) => {
 
     memoryState.cft_pos = filtered;
     scheduleStateSave();
+
+    // Delete from MySQL as well — memory-only delete resurrects on reload.
+    const pool = await getDbPool();
+    if (pool) {
+      try {
+        await deleteOrderFromDb(pool, orgId, req.params.id);
+      } catch (err: any) {
+        res.status(502).json({ error: `Memory updated but MySQL delete failed: ${err.message}` });
+        return;
+      }
+    }
 
     void syncStateToMySql(orgId, { cft_pos: filtered });
     res.status(204).end();
@@ -514,11 +545,15 @@ app.post('/api/db/init-schema', async (_req: Request, res: Response) => {
 });
 
 app.get('/api/db/status', async (_req: Request, res: Response) => {
+  // Re-validates the pool so the endpoint never falsely claims MySQL is connected.
+  await getDbPool();
+  const connected = isDbConnected();
   res.json({
-    connected: isDbConnected(),
-    storageProvider: isDbConnected() ? 'mysql' : 'memory-with-file-sync',
+    connected,
+    storageProvider: connected ? 'mysql' : 'memory-with-file-sync',
     stateKeysCount: Object.keys(memoryState).length,
-    ordersCount: ((memoryState.cft_pos as any[]) || []).length
+    ordersCount: ((memoryState.cft_pos as any[]) || []).length,
+    db: getSafeDbConfig()
   });
 });
 
@@ -544,7 +579,7 @@ if (fs.existsSync(distPath)) {
 }
 
 // Start Server
-app.listen(PORT, async () => {
+const httpServer = app.listen(PORT, async () => {
   console.log(`====================================================`);
   console.log(`🚀 CFT Tracker Backend Server running on port ${PORT}`);
   console.log(`⚡ Mode: ${process.env.NODE_ENV || 'production'}`);
@@ -564,3 +599,17 @@ app.listen(PORT, async () => {
     console.warn(`[Database] Background schema verification notice: ${err.message}`);
   }
 });
+
+// Graceful shutdown — releases pool resources on SIGINT/SIGTERM.
+async function shutdown(signal: string): Promise<void> {
+  console.log(`[Server] Received ${signal}, shutting down...`);
+  httpServer.close(async () => {
+    await closeDbPool();
+    process.exit(0);
+  });
+  // Force exit if connections hang.
+  setTimeout(() => process.exit(1), 10000).unref();
+}
+
+process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));

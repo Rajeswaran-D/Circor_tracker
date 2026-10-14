@@ -139,6 +139,90 @@ export async function saveOrdersToDb(pool: Pool, orgId: string, orders: Purchase
         ]
       );
 
+      // Save Attachments (metadata only — no binary payload in current frontend type)
+      if (Array.isArray(po.attachments)) {
+        for (const att of po.attachments) {
+          if (!att.id) continue;
+          await conn.query(
+            `INSERT INTO po_attachments (
+               id, organization_id, purchase_order_id, file_name, attachment_type, file_size
+             ) VALUES (?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+               file_name = VALUES(file_name),
+               attachment_type = VALUES(attachment_type),
+               file_size = VALUES(file_size)`,
+            [
+              att.id,
+              orgId,
+              po.id,
+              att.name || 'attachment',
+              att.type || 'General',
+              att.size || ''
+            ]
+          );
+        }
+      }
+
+      // Save Baseline Revisions + change rows (frontend stores display names, not user FKs)
+      if (Array.isArray(po.revisions)) {
+        for (const rev of po.revisions) {
+          const revId = `${po.id}-rev-${rev.revNumber}`;
+          await conn.query(
+            `INSERT INTO baseline_revisions (
+               id, organization_id, purchase_order_id, revision_number, reason,
+               document_reference, requested_by, approved_by, approved_at
+             ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+             ON DUPLICATE KEY UPDATE
+               reason = VALUES(reason),
+               document_reference = VALUES(document_reference),
+               approved_at = VALUES(approved_at)`,
+            [
+              revId,
+              orgId,
+              po.id,
+              rev.revNumber,
+              rev.reason || '',
+              rev.docRef || '',
+              rev.approvedAt ? new Date(rev.approvedAt) : new Date()
+            ]
+          );
+
+          if (Array.isArray(rev.changes)) {
+            for (const ch of rev.changes) {
+              const changeId = `${revId}-${ch.lineId}-${ch.milestoneKey}`;
+              // Resolve product_line FK; skip orphan change rows rather than failing the order.
+              const [lineRows] = await conn.query<any[]>(
+                `SELECT id FROM product_lines WHERE id = ? LIMIT 1`,
+                [ch.lineId]
+              );
+              if (!lineRows || lineRows.length === 0) continue;
+              await conn.query(
+                `INSERT INTO baseline_revision_changes (
+                   id, organization_id, baseline_revision_id, product_line_id, milestone_key,
+                   old_duration_days, new_duration_days, old_baseline_end_date, new_baseline_end_date
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE
+                   old_duration_days = VALUES(old_duration_days),
+                   new_duration_days = VALUES(new_duration_days),
+                   old_baseline_end_date = VALUES(old_baseline_end_date),
+                   new_baseline_end_date = VALUES(new_baseline_end_date)`,
+                [
+                  changeId,
+                  orgId,
+                  revId,
+                  ch.lineId,
+                  ch.milestoneKey,
+                  ch.oldDuration ?? 0,
+                  ch.newDuration ?? 0,
+                  ch.oldBaselineEnd ? ch.oldBaselineEnd.slice(0, 10) : poDate,
+                  ch.newBaselineEnd ? ch.newBaselineEnd.slice(0, 10) : committedDate
+                ]
+              );
+            }
+          }
+        }
+      }
+
       // Save Product Lines
       if (Array.isArray(po.productLines)) {
         for (const line of po.productLines) {
@@ -353,6 +437,36 @@ export async function saveOrdersToDb(pool: Pool, orgId: string, orders: Purchase
   }
 }
 
+export async function deleteOrderFromDb(pool: Pool, orgId: string, orderId: string): Promise<boolean> {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    // Resolve by id or po_number within the org scope.
+    const [rows] = await conn.query<any[]>(
+      `SELECT id FROM purchase_orders WHERE organization_id = ? AND (id = ? OR po_number = ?) LIMIT 1`,
+      [orgId, orderId, orderId]
+    );
+    if (!rows || rows.length === 0) {
+      await conn.rollback();
+      return false;
+    }
+    const dbId: string = rows[0].id;
+    // Explicit deletes; FK cascades cover lines/milestones/materials/attachments/slots/cancellations.
+    await conn.query(`DELETE FROM purchase_orders WHERE organization_id = ? AND id = ?`, [orgId, dbId]);
+    await conn.commit();
+    return true;
+  } catch (err) {
+    try {
+      await conn.rollback();
+    } catch {
+      // Ignore rollback errors; original error is more informative.
+    }
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
 export async function loadOrdersFromDb(pool: Pool, orgId: string): Promise<PurchaseOrder[]> {
   const conn = await pool.getConnection();
   try {
@@ -493,6 +607,56 @@ export async function loadOrdersFromDb(pool: Pool, orgId: string): Promise<Purch
         }
       } catch {}
 
+      // Load Attachments (metadata) + Baseline Revisions + change rows.
+      let attachments: PurchaseOrder['attachments'] = [];
+      let revisions: PurchaseOrder['revisions'] = [];
+      try {
+        const [attRows] = await conn.query<any[]>(
+          `SELECT * FROM po_attachments WHERE organization_id = ? AND purchase_order_id = ? ORDER BY uploaded_at ASC`,
+          [orgId, poRow.id]
+        );
+        attachments = attRows.map((a: any) => ({
+          id: a.id,
+          name: a.file_name,
+          type: a.attachment_type,
+          size: a.file_size,
+          uploadedBy: '',
+          uploadedAt: a.uploaded_at ? new Date(a.uploaded_at).toISOString() : new Date().toISOString()
+        }));
+      } catch {}
+      try {
+        const [revRows] = await conn.query<any[]>(
+          `SELECT * FROM baseline_revisions WHERE organization_id = ? AND purchase_order_id = ? ORDER BY revision_number ASC`,
+          [orgId, poRow.id]
+        );
+        for (const rv of revRows) {
+          let changes: PurchaseOrder['revisions'][number]['changes'] = [];
+          try {
+            const [chRows] = await conn.query<any[]>(
+              `SELECT * FROM baseline_revision_changes WHERE organization_id = ? AND baseline_revision_id = ?`,
+              [orgId, rv.id]
+            );
+            changes = chRows.map((c: any) => ({
+              lineId: c.product_line_id,
+              milestoneKey: c.milestone_key,
+              oldDuration: Number(c.old_duration_days),
+              newDuration: Number(c.new_duration_days),
+              oldBaselineEnd: String(c.old_baseline_end_date).slice(0, 10),
+              newBaselineEnd: String(c.new_baseline_end_date).slice(0, 10)
+            }));
+          } catch {}
+          revisions.push({
+            revNumber: Number(rv.revision_number),
+            requestedBy: '',
+            approvedBy: '',
+            approvedAt: rv.approved_at ? new Date(rv.approved_at).toISOString() : new Date().toISOString(),
+            reason: rv.reason || '',
+            docRef: rv.document_reference || '',
+            changes
+          });
+        }
+      } catch {}
+
       orders.push({
         id: poRow.id,
         poNumber: poRow.po_number,
@@ -506,8 +670,8 @@ export async function loadOrdersFromDb(pool: Pool, orgId: string): Promise<Purch
         actualDeliveryDate: poRow.actual_delivery_date ? String(poRow.actual_delivery_date).slice(0, 10) : undefined,
         status: poRow.status,
         productLines,
-        revisions: [],
-        attachments: [],
+        revisions,
+        attachments,
         cancellationRequest,
         createdBy: poRow.created_by || 'Sales',
         createdAt: poRow.created_at ? new Date(poRow.created_at).toISOString() : new Date().toISOString(),
