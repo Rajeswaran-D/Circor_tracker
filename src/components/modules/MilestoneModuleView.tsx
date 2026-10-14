@@ -169,7 +169,18 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
   };
 
   // Group purchase orders and calculate stage rollup data
-  const validPOs = purchaseOrders.filter(po => (stageKey === 'pm_baseline' || stageKey === 'baseline_review' || po.status !== 'Baseline Pending') && po.status !== 'Cancelled' && !po.isCancelled);
+  const validPOs = purchaseOrders.filter(po => {
+    if (po.status === 'Cancelled' || po.isCancelled) return false;
+    if (stageKey === 'pm_baseline' || stageKey === 'baseline_review') return true;
+    const isStage2Done = (po.productLines || []).some(line => {
+      const pm = (line.milestones || []).find(m => m.key === 'pm_baseline' || m.key === 'baseline_review' || m.stageOrder === 2);
+      return pm?.status === 'Completed' || Boolean(pm?.actualEndDate) || (pm?.completionPct === 100);
+    });
+    const hasSubsequentProgress = (po.productLines || []).some(line =>
+      (line.milestones || []).some(m => m.stageOrder > 2 && (m.status === 'Completed' || Boolean(m.actualStartDate) || Boolean(m.actualEndDate)))
+    );
+    return (po.status !== 'Baseline Pending') || isStage2Done || hasSubsequentProgress;
+  });
 
   const poStageGroups = validPOs.map(po => {
     const linesWithMs = (po.productLines || []).map(line => {

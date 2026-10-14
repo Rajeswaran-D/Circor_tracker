@@ -209,6 +209,46 @@ const deleteOrderOnServer = (poId: string) => {
   }).catch(() => undefined);
 };
 
+// Multi-tab real-time broadcast channel for instantaneous zero-latency sync across all open tabs
+const crossTabChannel = typeof window !== 'undefined' && 'BroadcastChannel' in window
+  ? new BroadcastChannel('cft_tracker_cross_tab_channel')
+  : null;
+
+// Ids deleted from this tab or sibling tabs. Strips these for 60s so a
+// stale server snapshot cannot re-render the row across any tab.
+const LOCAL_TOMBSTONE_TTL_MS = 120_000;
+const recentlyDeletedOrders = new Map<string, number>();
+
+const rememberDeletedOrder = (poId: string) => {
+  recentlyDeletedOrders.set(poId, Date.now());
+  try {
+    const list: string[] = JSON.parse(localStorage.getItem('cft_deleted_order_ids') || '[]');
+    if (!list.includes(poId)) {
+      list.push(poId);
+      localStorage.setItem('cft_deleted_order_ids', JSON.stringify(list));
+    }
+  } catch {}
+  if (crossTabChannel) {
+    try {
+      crossTabChannel.postMessage({ type: 'CFT_PO_DELETED', poId });
+    } catch {}
+  }
+};
+
+const stripRecentlyDeleted = (orders: PurchaseOrder[]): PurchaseOrder[] => {
+  const now = Date.now();
+  for (const [id, ts] of recentlyDeletedOrders) {
+    if (now - ts > LOCAL_TOMBSTONE_TTL_MS) recentlyDeletedOrders.delete(id);
+  }
+  let localDeletedIds: string[] = [];
+  try {
+    localDeletedIds = JSON.parse(localStorage.getItem('cft_deleted_order_ids') || '[]');
+  } catch {}
+  const deletedSet = new Set([...recentlyDeletedOrders.keys(), ...localDeletedIds]);
+  if (deletedSet.size === 0) return orders;
+  return orders.filter(o => !deletedSet.has(o.id));
+};
+
 const saveSharedState = (key: string, value: unknown) => {
   fetch(sharedStateEndpoint, {
     method: 'PUT',
@@ -231,14 +271,29 @@ const getPurchaseOrderStatus = (productLines: PurchaseOrder['productLines'], isC
  * Recomputes a PO's rollup status after its lines changed without clobbering a
  * terminal/pending state (Baseline Pending, Closed, Cancelled).
  */
-const withRefreshedStatus = (po: PurchaseOrder, productLines: PurchaseOrder['productLines']): PurchaseOrder => ({
-  ...po,
-  productLines,
-  status: po.isCancelled || po.status === 'Cancelled' || po.isClosed || po.status === 'Baseline Pending'
-    ? po.status
-    : getPurchaseOrderStatus(productLines, po.isClosed),
-  lastUpdatedAt: new Date().toISOString()
-});
+const withRefreshedStatus = (po: PurchaseOrder, productLines: PurchaseOrder['productLines']): PurchaseOrder => {
+  const isStage2Done = productLines.length > 0 && productLines.every(line => {
+    const pm = (line.milestones || []).find(m => m.key === 'pm_baseline' || m.key === 'baseline_review' || m.stageOrder === 2);
+    return pm?.status === 'Completed' || Boolean(pm?.actualEndDate) || (pm?.completionPct === 100);
+  });
+  const hasSubsequentProgress = productLines.some(line => 
+    (line.milestones || []).some(m => m.stageOrder > 2 && (m.status === 'Completed' || Boolean(m.actualStartDate) || Boolean(m.actualEndDate)))
+  );
+  const stillPendingBaseline = (po.status === 'Baseline Pending') && !isStage2Done && !hasSubsequentProgress;
+
+  return {
+    ...po,
+    productLines,
+    status: po.isCancelled || po.status === 'Cancelled'
+      ? 'Cancelled'
+      : po.isClosed
+      ? 'Closed'
+      : stillPendingBaseline
+      ? 'Baseline Pending'
+      : getPurchaseOrderStatus(productLines, po.isClosed),
+    lastUpdatedAt: new Date().toISOString()
+  };
+};
 
 /** Reads the stored risk thresholds so load-time recalculation matches the configured ones. */
 function loadConfigThresholds(): { atRisk: number; delayed: number } {
@@ -423,13 +478,22 @@ const normalizeMilestoneFlows = (orders: PurchaseOrder[], todayStr: string): Pur
     return end && end > latest ? end : latest;
   }, '');
 
+  const isStage2Done = recalculatedLines.length > 0 && recalculatedLines.every(line => {
+    const pm = (line.milestones || []).find(m => m.key === 'pm_baseline' || m.key === 'baseline_review' || m.stageOrder === 2);
+    return pm?.status === 'Completed' || Boolean(pm?.actualEndDate) || (pm?.completionPct === 100);
+  });
+  const hasSubsequentProgress = recalculatedLines.some(line => 
+    (line.milestones || []).some(m => m.stageOrder > 2 && (m.status === 'Completed' || Boolean(m.actualStartDate) || Boolean(m.actualEndDate)))
+  );
+  const stillPendingBaseline = (po.status === 'Baseline Pending') && !isStage2Done && !hasSubsequentProgress;
+
   return {
     ...po,
     productLines: recalculatedLines,
     revisedDeliveryDate: (maxFinalForecast && maxFinalForecast > po.committedDeliveryDate) ? maxFinalForecast : po.committedDeliveryDate,
     status: po.isCancelled || po.status === 'Cancelled'
       ? 'Cancelled'
-      : po.isClosed ? 'Closed' : po.status === 'Baseline Pending' ? 'Baseline Pending' : getPurchaseOrderStatus(recalculatedLines, po.isClosed)
+      : po.isClosed ? 'Closed' : stillPendingBaseline ? 'Baseline Pending' : getPurchaseOrderStatus(recalculatedLines, po.isClosed)
   };
 });
 
@@ -619,6 +683,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.error(`Failed to write to localStorage for key ${key}:`, e);
     }
+    // Broadcast immediately across all open tabs
+    if (crossTabChannel) {
+      try {
+        crossTabChannel.postMessage({
+          type: 'CFT_SYNC_KEY',
+          key,
+          serialized,
+          timestamp: Date.now()
+        });
+      } catch {}
+    }
     if (lastPushedRef.current[key] === serialized) return;
     lastPushedRef.current[key] = serialized;
     saveSharedState(key, value);
@@ -699,7 +774,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const sharedState = await response.json() as Record<string, unknown>;
         Object.entries(sharedState).forEach(([key, value]) => {
           if (!sharedStateKeys.some(storageKey => storageKey === key)) return;
-          const serialized = JSON.stringify(value);
+          let serialized = JSON.stringify(value);
 
           // Skip our own echo: the server is only reflecting what this tab pushed.
           if (lastPushedRef.current[key as StorageKey] === serialized) return;
@@ -710,27 +785,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
 
           if (key === 'cft_pos') {
+            // Strip ids this tab or sibling tabs deleted: the DELETE may still be in
+            // flight (or another tab pushed a pre-delete snapshot), so the raw
+            // server list can still contain a row the user already removed.
+            const rawSharedOrders = (Array.isArray(value) ? value : []) as PurchaseOrder[];
+            const strippedSharedOrders = stripRecentlyDeleted(rawSharedOrders);
+            if (strippedSharedOrders.length !== rawSharedOrders.length) {
+              serialized = JSON.stringify(strippedSharedOrders);
+              if (lastPushedRef.current[key as StorageKey] === serialized) return;
+              if (serialized === localStorage.getItem(key)) {
+                lastPushedRef.current[key as StorageKey] = serialized;
+                return;
+              }
+            }
             try {
               const localOrders = JSON.parse(localStorage.getItem('cft_pos') || '[]') as PurchaseOrder[];
-              const sharedOrders = (value as PurchaseOrder[]) || [];
-              // DELETE WINS: server list is authoritative for removals. If the
-              // server no longer has an order the local tab still holds, that
-              // order was deleted elsewhere — drop it even if local looks newer.
-              const sharedIds = new Set(sharedOrders.map(o => o.id));
-              const locallyDeletedElsewhere = localOrders.some(o => !sharedIds.has(o.id));
-              if (locallyDeletedElsewhere) {
-                localStorage.setItem(key, serialized);
-                applyStoredState(key, serialized);
-                return;
+              const sharedOrders = strippedSharedOrders;
+              
+              // Build merged order list to preserve non-deleted local orders across tabs
+              const sharedIdMap = new Map(sharedOrders.map(o => [o.id, o]));
+              const mergedOrders: PurchaseOrder[] = [...sharedOrders];
+              let hasLocalOnly = false;
+              for (const lOrder of localOrders) {
+                if (!sharedIdMap.has(lOrder.id)) {
+                  const isDeleted = recentlyDeletedOrders.has(lOrder.id);
+                  if (!isDeleted) {
+                    mergedOrders.unshift(lOrder);
+                    hasLocalOnly = true;
+                  }
+                } else {
+                  const sOrder = sharedIdMap.get(lOrder.id);
+                  if (sOrder && lOrder.lastUpdatedAt && sOrder.lastUpdatedAt && lOrder.lastUpdatedAt > sOrder.lastUpdatedAt) {
+                    const idx = mergedOrders.findIndex(o => o.id === lOrder.id);
+                    if (idx >= 0) mergedOrders[idx] = lOrder;
+                  }
+                }
               }
               const localLatest = localOrders.reduce((latest, order) => order.lastUpdatedAt > latest ? order.lastUpdatedAt : latest, '');
               const sharedLatest = sharedOrders.reduce((latest, order) => order.lastUpdatedAt > latest ? order.lastUpdatedAt : latest, '');
-              // Local wins when it is strictly newer OR has diverged in count
-              // while being at least as fresh (protects offline edits).
-              const localHasNewerData = localOrders.length > sharedOrders.length
-                ? localLatest >= sharedLatest
-                : localLatest > sharedLatest;
-              if (localHasNewerData) return;
+              
+              if (hasLocalOnly || localLatest > sharedLatest) {
+                const mergedSerialized = JSON.stringify(mergedOrders);
+                localStorage.setItem(key, mergedSerialized);
+                applyStoredState(key, mergedSerialized);
+                saveSharedState(key, mergedOrders);
+                return;
+              }
             } catch {
               // Fall through to the shared state when local data cannot be compared.
             }
@@ -754,8 +854,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') syncFromStorage();
+      if (document.visibilityState === 'visible') {
+        syncFromStorage();
+        void syncFromServer();
+      }
     };
+
+    let handleChannelMessage: ((event: MessageEvent) => void) | null = null;
+    if (crossTabChannel) {
+      handleChannelMessage = (event: MessageEvent) => {
+        const data = event.data;
+        if (!data || typeof data !== 'object') return;
+        if (data.type === 'CFT_SYNC_KEY' && data.key && data.serialized) {
+          applyStoredState(data.key, data.serialized);
+        } else if (data.type === 'CFT_PO_DELETED' && data.poId) {
+          rememberDeletedOrder(data.poId);
+          setPurchaseOrders(prev => prev.filter(p => p.id !== data.poId));
+        } else if (data.type === 'CFT_REQUEST_LATEST') {
+          try {
+            crossTabChannel.postMessage({
+              type: 'CFT_REPLY_LATEST',
+              states: {
+                cft_pos: localStorage.getItem('cft_pos'),
+                cft_products: localStorage.getItem('cft_products'),
+                cft_templates: localStorage.getItem('cft_templates'),
+                cft_rectifications: localStorage.getItem('cft_rectifications'),
+                cft_audit: localStorage.getItem('cft_audit'),
+                cft_config: localStorage.getItem('cft_config')
+              }
+            });
+          } catch {}
+        } else if (data.type === 'CFT_REPLY_LATEST' && data.states) {
+          Object.entries(data.states).forEach(([k, s]) => {
+            if (typeof s === 'string' && s) {
+              applyStoredState(k, s);
+            }
+          });
+        }
+      };
+      crossTabChannel.addEventListener('message', handleChannelMessage);
+      try {
+        crossTabChannel.postMessage({ type: 'CFT_REQUEST_LATEST' });
+      } catch {}
+    }
 
     // Seed the echo-guard with what is already persisted so restored state
     // is not immediately re-PUT to the server as a "change".
@@ -775,6 +916,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (crossTabChannel && handleChannelMessage) {
+        crossTabChannel.removeEventListener('message', handleChannelMessage);
+      }
       window.clearInterval(serverSyncTimer);
     };
   }, []);
@@ -2185,8 +2329,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (actionType === 'delete') {
       const updated = purchaseOrders.filter(p => p.id !== poId);
+      rememberDeletedOrder(poId);
       setPurchaseOrders(updated);
       persistState('cft_pos', updated);
+      // Without the server DELETE the MySQL row survives and the 2s poll
+      // resurrects the order in every tab within seconds.
+      deleteOrderOnServer(poId);
       addAudit(activeRole, activeRole, targetPO.poNumber, 'DELETE_PO_APPROVED', 'ADMIN-DELETE', `Approved cancellation and permanently deleted PO ${targetPO.poNumber}. Notes: ${decisionNotes || 'Approved by Admin.'}`);
       return { success: true };
     }
@@ -2274,9 +2422,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!targetPO) return { success: false, error: 'Purchase Order not found.' };
 
     const updated = purchaseOrders.filter(p => p.id !== poId);
-    // Seed the echo guard BEFORE persistState so the 2s server poll cannot
-    // re-apply the deleted row from a stale snapshot while it propagates.
-    lastPushedRef.current['cft_pos'] = JSON.stringify(updated);
+    // Local tombstone first so the 2s poll cannot re-apply this id from a
+    // stale snapshot while the DELETE propagates. Do NOT pre-seed the echo
+    // guard here: persistState compares its own output against lastPushedRef,
+    // so seeding it first would silently skip the shared-state PUT entirely.
+    rememberDeletedOrder(poId);
     setPurchaseOrders(updated);
     persistState('cft_pos', updated);
     // Persist the delete server-side (MySQL + authoritative memory). Without

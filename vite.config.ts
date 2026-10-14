@@ -10,10 +10,22 @@ function handleDevFallback(req: any, res: any) {
   if (!res || !('writeHead' in res) || res.headersSent) return;
 
   const stateFile = process.env.STATE_FILE_PATH || path.join(os.homedir(), '.cft-project-e2e-tracker-shared-state.json');
-  let state: Record<string, unknown> = {};
+  let state: Record<string, any> = {};
   try {
     if (fs.existsSync(stateFile)) state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   } catch {}
+
+  // Tombstone parity with server/server.ts: a deleted order id recorded here
+  // must never be served again or re-inserted by a stale PUT.
+  const tombstonesOf = (s: Record<string, any>): Record<string, string> =>
+    (s.__deleted_order_ids__ && typeof s.__deleted_order_ids__ === 'object' ? s.__deleted_order_ids__ : {}) as Record<string, string>;
+  const stripDeleted = (list: any[]): any[] => {
+    const tombs = tombstonesOf(state);
+    return Array.isArray(list) ? list.filter((o: any) => o && o.id && !tombs[o.id]) : [];
+  };
+  const writeState = () => {
+    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8');
+  };
 
   const url = req.url || '';
   if (url.includes('/api/health')) {
@@ -23,6 +35,7 @@ function handleDevFallback(req: any, res: any) {
   }
   if (url.includes('/api/shared-state')) {
     if (req.method === 'GET') {
+      state.cft_pos = stripDeleted(state.cft_pos || []);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(state));
       return;
@@ -33,8 +46,9 @@ function handleDevFallback(req: any, res: any) {
       req.on('end', () => {
         try {
           const update = JSON.parse(body);
+          if (Array.isArray(update.cft_pos)) update.cft_pos = stripDeleted(update.cft_pos);
           state = { ...state, ...update };
-          fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8');
+          writeState();
           res.writeHead(204);
           res.end();
         } catch {
@@ -46,6 +60,20 @@ function handleDevFallback(req: any, res: any) {
     }
   }
   if (url.includes('/api/orders')) {
+    if (req.method === 'DELETE') {
+      // A delete against a dead backend must still remove the row (and block
+      // later re-inserts) — never answer DELETE with the order list.
+      const id = decodeURIComponent((url.split('/api/orders/')[1] || '').split('?')[0] || '');
+      if (id) {
+        state.cft_pos = (state.cft_pos || []).filter((o: any) => o.id !== id);
+        state.__deleted_order_ids__ = { ...tombstonesOf(state), [id]: new Date().toISOString() };
+        writeState();
+      }
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    state.cft_pos = stripDeleted(state.cft_pos || []);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(state.cft_pos || []));
     return;

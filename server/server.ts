@@ -85,6 +85,61 @@ function getOrgId(req: Request): string {
   return (req.headers['x-organization-id'] as string) || DEFAULT_ORG_ID;
 }
 
+// ---------------------------------------------------------------------------
+// Deleted-order tombstones — make a delete stick everywhere.
+// A tombstone blocks ANY later re-insert of the same order id. This matters
+// because shared-state sync and POST/PUT all UPSERT: a stale tab can push a
+// pre-delete cft_pos snapshot and silently resurrect the MySQL row. Reads also
+// filter tombstoned ids, so even if a row sneaks back it can never render.
+// Tombstones live in the state file (survive restarts) and clear when the
+// same id is re-created via POST /api/orders. After TTL they lapse by design.
+// ---------------------------------------------------------------------------
+const TOMBSTONE_KEY = '__deleted_order_ids__';
+const TOMBSTONE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const TOMBSTONE_MAX = 1000;
+
+function getTombstones(): Record<string, string> {
+  const raw = memoryState[TOMBSTONE_KEY];
+  return raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? { ...(raw as Record<string, string>) }
+    : {};
+}
+
+function pruneTombstones(map: Record<string, string>): Record<string, string> {
+  const cutoff = Date.now() - TOMBSTONE_TTL_MS;
+  let entries = Object.entries(map).filter(([, ts]) => {
+    const t = Date.parse(ts);
+    return Number.isFinite(t) && t >= cutoff;
+  });
+  if (entries.length > TOMBSTONE_MAX) entries = entries.slice(-TOMBSTONE_MAX);
+  return Object.fromEntries(entries);
+}
+
+function tombstoneOrder(orderId: string): void {
+  const next = pruneTombstones({ ...getTombstones(), [orderId]: new Date().toISOString() });
+  memoryState[TOMBSTONE_KEY] = next;
+  scheduleStateSave();
+}
+
+function untombstoneOrder(orderId: string): void {
+  const current = getTombstones();
+  if (!(orderId in current)) return;
+  delete current[orderId];
+  memoryState[TOMBSTONE_KEY] = current;
+  scheduleStateSave();
+}
+
+function isOrderTombstoned(orderId: string): boolean {
+  const ts = getTombstones()[orderId];
+  if (!ts) return false;
+  const t = Date.parse(ts);
+  return !Number.isFinite(t) || t >= Date.now() - TOMBSTONE_TTL_MS;
+}
+
+function stripTombstonedOrders(orders: PurchaseOrder[]): PurchaseOrder[] {
+  return orders.filter(o => o && o.id && !isOrderTombstoned(o.id));
+}
+
 // Background sync to MySQL when state changes.
 // NOTE: shared-state sync is UPSERT-only by design (it cannot express deletes).
 // Order deletes go through DELETE /api/orders/:id -> deleteOrderFromDb.
@@ -95,7 +150,10 @@ async function syncStateToMySql(orgId: string, update: Record<string, unknown>):
 
   try {
     if (update.cft_pos && Array.isArray(update.cft_pos)) {
-      await saveOrdersToDb(pool, orgId, update.cft_pos as PurchaseOrder[]);
+      // Tombstoned ids must never be re-inserted — stale tabs routinely push
+      // pre-delete snapshots of cft_pos through this UPSERT path.
+      const liveOrders = stripTombstonedOrders(update.cft_pos as PurchaseOrder[]);
+      await saveOrdersToDb(pool, orgId, liveOrders);
     }
     if (update.cft_products && Array.isArray(update.cft_products)) {
       await saveProductsToDb(pool, orgId, update.cft_products as ProductMasterItem[]);
@@ -147,6 +205,11 @@ app.get('/api/shared-state', async (req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.setHeader('X-Served-By', 'cft-production-engine');
 
+  // Never serve a deleted id from memory — a stale tab may have re-pushed it.
+  if (Array.isArray(memoryState.cft_pos)) {
+    memoryState.cft_pos = stripTombstonedOrders(memoryState.cft_pos as PurchaseOrder[]);
+  }
+
   const pool = await getDbPool();
   if (pool) {
     try {
@@ -167,7 +230,7 @@ app.get('/api/shared-state', async (req: Request, res: Response) => {
       // Other collections keep the old non-empty guard to avoid clobbering local
       // edits when a loader transiently fails.
       if (orders) {
-        mergedState.cft_pos = orders;
+        mergedState.cft_pos = stripTombstonedOrders(orders);
       }
       if (products && products.length > 0) mergedState.cft_products = products;
       if (templates && templates.length > 0) mergedState.cft_templates = templates;
@@ -200,11 +263,17 @@ app.put('/api/shared-state', async (req: Request, res: Response) => {
       ...memoryState,
       ...update
     };
+    // Strip deleted ids immediately: this handler last-write-wins replaces
+    // memory, so a stale tab's pre-delete snapshot must not re-introduce a
+    // tombstoned order here (and the state file must stay clean too).
+    if (Array.isArray(memoryState.cft_pos)) {
+      memoryState.cft_pos = stripTombstonedOrders(memoryState.cft_pos as PurchaseOrder[]);
+    }
 
     scheduleStateSave();
 
-    // Async sync to MySQL if connected
-    void syncStateToMySql(orgId, update);
+    // Sync to MySQL if connected
+    await syncStateToMySql(orgId, update);
 
     res.status(204).end();
   } catch (err: any) {
@@ -220,18 +289,24 @@ app.get('/api/orders', async (req: Request, res: Response) => {
   try {
     const orgId = getOrgId(req);
     const pool = await getDbPool();
+    let orders: PurchaseOrder[] = [];
     if (pool) {
       try {
-        // DB is authoritative (even when empty) so deleted orders never reappear
-        // from a stale memory/file snapshot.
-        const orders = await loadOrdersFromDb(pool, orgId);
-        memoryState.cft_pos = orders;
-        res.json(orders);
-        return;
+        orders = stripTombstonedOrders(await loadOrdersFromDb(pool, orgId));
       } catch {}
     }
-    const orders = (memoryState.cft_pos as PurchaseOrder[]) || [];
-    res.json(orders);
+    const memOrders = stripTombstonedOrders((memoryState.cft_pos as PurchaseOrder[]) || []);
+    // Merge: preserve any uncommitted or in-memory orders that aren't tombstoned
+    const dbIds = new Set(orders.map(o => o.id));
+    const merged = [...orders];
+    for (const mo of memOrders) {
+      if (!dbIds.has(mo.id)) {
+        merged.unshift(mo);
+      }
+    }
+    const finalOrders = merged.length > 0 ? merged : memOrders;
+    memoryState.cft_pos = finalOrders;
+    res.json(finalOrders);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -239,6 +314,10 @@ app.get('/api/orders', async (req: Request, res: Response) => {
 
 app.get('/api/orders/:id', async (req: Request, res: Response) => {
   try {
+    if (isOrderTombstoned(req.params.id)) {
+      res.status(404).json({ error: 'Order not found' });
+      return;
+    }
     const orgId = getOrgId(req);
     // Prefer MySQL when available so a restart/reload reflects committed rows.
     const pool = await getDbPool();
@@ -280,7 +359,10 @@ app.post('/api/orders', async (req: Request, res: Response) => {
     memoryState.cft_pos = updated;
     scheduleStateSave();
 
-    void syncStateToMySql(orgId, { cft_pos: updated });
+    // Re-creating an order with the same id clears its delete tombstone so
+    // the fresh row syncs instead of being filtered as a resurrection.
+    untombstoneOrder(newOrder.id);
+    await syncStateToMySql(orgId, { cft_pos: updated });
     res.status(201).json(newOrder);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -303,7 +385,7 @@ app.put('/api/orders/:id', async (req: Request, res: Response) => {
     memoryState.cft_pos = currentOrders;
     scheduleStateSave();
 
-    void syncStateToMySql(orgId, { cft_pos: currentOrders });
+    await syncStateToMySql(orgId, { cft_pos: currentOrders });
     res.json(currentOrders[idx]);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -313,6 +395,9 @@ app.put('/api/orders/:id', async (req: Request, res: Response) => {
 app.delete('/api/orders/:id', async (req: Request, res: Response) => {
   try {
     const orgId = getOrgId(req);
+    // Tombstone FIRST: from this moment no upsert path may re-insert the id
+    // and no read path may serve it, regardless of what happens below.
+    tombstoneOrder(req.params.id);
     const pool = await getDbPool();
     if (pool) {
       try {

@@ -625,7 +625,16 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                       const recoveredDelay = isCompleted ? Math.max(0, prevVariance - currVariance) : 0;
                       const isStarted = (Boolean(ms.actualStartDate) || productLineMilestones.some(p => p.isLineStarted)) && !isCompleted;
                       const isInProgress = (isStarted || ms.status === 'In Progress') && !isCompleted;
-                      const isPendingBaseline = po.status === 'Baseline Pending';
+                      
+                      // An order is no longer pending baseline once Stage 2 is completed or any subsequent stage has activity
+                      const isStage2Done = selectedLine.milestones.some(m =>
+                        (m.key === 'pm_baseline' || m.key === 'baseline_review' || m.stageOrder === 2) &&
+                        (m.status === 'Completed' || Boolean(m.actualEndDate))
+                      );
+                      const hasSubsequentProgress = selectedLine.milestones.some(m =>
+                        m.stageOrder > 2 && (m.status === 'Completed' || Boolean(m.actualStartDate) || Boolean(m.actualEndDate))
+                      );
+                      const isPendingBaseline = (po.status === 'Baseline Pending') && !isStage2Done && !hasSubsequentProgress;
 
                       // Find the first uncompleted milestone in the line (Stage 1 is already completed)
                       const activeStageIdx = selectedLine.milestones.findIndex((m, mIdx) => {
@@ -639,8 +648,8 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                         return !mCompleted;
                       });
 
-                      // Current / Ready to Start milestone: either matches activeStageIdx OR is uncompleted with predecessor completed
-                      const isCurrent = !isPendingBaseline && !isPoCompletedOrClosed && !isCompleted && (
+                      // Current / Ready to Start milestone: Stage 1 is NEVER isCurrent; activeStageIdx or uncompleted with predecessor completed
+                      const isCurrent = !isStage1 && !isPendingBaseline && !isPoCompletedOrClosed && !isCompleted && (
                         index === activeStageIdx || (isPrevCompleted && (activeStageIdx === -1 || activeStageIdx >= index))
                       );
                       const isUnstarted = !isCompleted && !isInProgress && !isStarted;
@@ -648,8 +657,8 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                       const hasInheritedShift = currVariance > 0 && !isNewDelayFormedAtThisStage;
                       const friendlyName = getStageFriendlyName(ms.key, selectedLine);
 
-                      const effectiveActualStart = ms.actualStartDate || (isCompleted && isStage1 ? (ms.committedBaselineStartDate || po.poDate) : undefined);
-                      const effectiveActualEnd = ms.actualEndDate || (isCompleted && isStage1 ? (ms.committedBaselineEndDate || ms.committedBaselineStartDate || po.poDate) : undefined);
+                      const effectiveActualStart = ms.actualStartDate || (isStage1 ? (ms.committedBaselineStartDate || po.poDate) : undefined);
+                      const effectiveActualEnd = ms.actualEndDate || (isStage1 ? (ms.committedBaselineEndDate || ms.committedBaselineStartDate || po.poDate) : undefined);
 
                       const {
                         revisedStart,
@@ -672,7 +681,7 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                           
                           {/* Node Bullet Icon */}
                           <div className={`absolute -left-6 top-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold border ${
-                            isCompleted 
+                            (isCompleted || isStage1)
                               ? 'bg-emerald-600 border-emerald-600 text-white' 
                               : isNewDelayFormedAtThisStage 
                               ? 'bg-rose-500 border-rose-500 text-white' 
@@ -682,18 +691,18 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                               ? 'bg-emerald-100 border-emerald-600 text-emerald-800 ring-2 ring-emerald-400/30' 
                               : 'bg-slate-100 border-slate-300 text-slate-400'
                           }`}>
-                            {isCompleted ? <CheckCircle2 className="w-3.5 h-3.5" /> : ms.stageOrder}
+                            {(isCompleted || isStage1) ? <CheckCircle2 className="w-3.5 h-3.5" /> : ms.stageOrder}
                           </div>
 
                           {/* Stage Information */}
                           <div className="flex-1">
                             <div className="flex items-center gap-2">
-                              <span className={`font-bold ${isCurrent ? 'text-emerald-950 text-sm' : isCompleted ? 'text-slate-800' : 'text-slate-600'}`}>
+                              <span className={`font-bold ${isCurrent ? 'text-emerald-950 text-sm' : (isCompleted || isStage1) ? 'text-slate-800' : 'text-slate-600'}`}>
                                 {friendlyName}
                               </span>
 
                               <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
-                                isCompleted 
+                                (isCompleted || isStage1)
                                   ? (isNewDelayFormedAtThisStage 
                                       ? 'bg-amber-50 border-amber-300 text-amber-900' 
                                       : currVariance > 0 
@@ -713,7 +722,7 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                                   ? 'bg-amber-50 border-amber-200 text-amber-800'
                                   : 'bg-slate-100 border-slate-200 text-slate-500'
                               }`}>
-                                {isCompleted 
+                                {(isCompleted || isStage1) 
                                   ? (isNewDelayFormedAtThisStage 
                                       ? `Completed (+${addedDelayHere}d delay added)` 
                                       : currVariance > 0 
@@ -788,7 +797,7 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                                       {effectiveActualEnd || 'Pending'}
                                     </strong>
                                   </div>
-                                  {isCompleted && effectiveActualEnd && (
+                                  {(isCompleted || isStage1) && effectiveActualEnd && (
                                     <div className="text-emerald-700 font-semibold flex items-center gap-1">
                                       ✓ Passed on {effectiveActualEnd}
                                       {recoveredDelay > 0 && (
@@ -846,7 +855,7 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                           </div>
 
                           {/* Quick Record Action Buttons - STRICTLY FOR ACTIVE MILESTONE ONLY */}
-                          {!po.isClosed && po.status !== 'Completed' && !isPendingBaseline && isCurrent && (() => {
+                          {!po.isClosed && po.status !== 'Completed' && !isPendingBaseline && !isStage1 && isCurrent && (() => {
                             const isAuthorizedForMilestone = isMilestoneOwnedByRole(ms.key, activeRole);
                             if (!isAuthorizedForMilestone) return null;
 
