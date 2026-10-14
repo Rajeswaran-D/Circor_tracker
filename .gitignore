@@ -18,6 +18,9 @@ dist-ssr
 .env.production
 .env.local
 .env.*.local
+*.pem
+*.crt
+*.key
 
 # Local sample data / build artefacts that should not go to the org server.
 Book2.xlsx
