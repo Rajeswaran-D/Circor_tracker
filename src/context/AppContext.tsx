@@ -197,6 +197,18 @@ const storageConfig = getStorageConfig();
 const sharedStateKeys = STORAGE_KEYS;
 const sharedStateEndpoint = getSharedStateEndpoint(storageConfig);
 
+const deleteOrderOnServer = (poId: string) => {
+  // Fire-and-forget server delete; authoritative refresh arrives via the
+  // shared-state poll. Failures only log — local state is already pruned so
+  // the UI never shows a row the user just deleted.
+  fetch(`${storageConfig.apiBaseUrl.replace(/\/$/, '')}/orders/${encodeURIComponent(poId)}`, {
+    method: 'DELETE',
+    headers: {
+      'X-Organization-Id': storageConfig.organizationId
+    }
+  }).catch(() => undefined);
+};
+
 const saveSharedState = (key: string, value: unknown) => {
   fetch(sharedStateEndpoint, {
     method: 'PUT',
@@ -701,6 +713,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             try {
               const localOrders = JSON.parse(localStorage.getItem('cft_pos') || '[]') as PurchaseOrder[];
               const sharedOrders = (value as PurchaseOrder[]) || [];
+              // DELETE WINS: server list is authoritative for removals. If the
+              // server no longer has an order the local tab still holds, that
+              // order was deleted elsewhere — drop it even if local looks newer.
+              const sharedIds = new Set(sharedOrders.map(o => o.id));
+              const locallyDeletedElsewhere = localOrders.some(o => !sharedIds.has(o.id));
+              if (locallyDeletedElsewhere) {
+                localStorage.setItem(key, serialized);
+                applyStoredState(key, serialized);
+                return;
+              }
               const localLatest = localOrders.reduce((latest, order) => order.lastUpdatedAt > latest ? order.lastUpdatedAt : latest, '');
               const sharedLatest = sharedOrders.reduce((latest, order) => order.lastUpdatedAt > latest ? order.lastUpdatedAt : latest, '');
               // Local wins when it is strictly newer OR has diverged in count
@@ -2252,8 +2274,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!targetPO) return { success: false, error: 'Purchase Order not found.' };
 
     const updated = purchaseOrders.filter(p => p.id !== poId);
+    // Seed the echo guard BEFORE persistState so the 2s server poll cannot
+    // re-apply the deleted row from a stale snapshot while it propagates.
+    lastPushedRef.current['cft_pos'] = JSON.stringify(updated);
     setPurchaseOrders(updated);
     persistState('cft_pos', updated);
+    // Persist the delete server-side (MySQL + authoritative memory). Without
+    // this, other tabs and reloads resurrect the row from the DB/file snapshot.
+    deleteOrderOnServer(poId);
     addAudit(activeRole, activeRole, targetPO.poNumber, 'DELETE_PO_DIRECT', 'ADMIN-DELETE', `Admin permanently deleted PO ${targetPO.poNumber}. Reason: ${reason || 'Direct deletion.'}`);
     return { success: true };
   };
