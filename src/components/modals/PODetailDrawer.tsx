@@ -609,10 +609,16 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                       const allLinesDone = productLineMilestones.length > 0 && productLineMilestones.every(p => p.isLineDone);
 
                       const isPoCompletedOrClosed = po.status === 'Completed' || po.isClosed;
-                      const isStage1 = ms.key === 'po_from_customer' || ms.stageOrder === 1;
+                      const isStage1 = ms.key === 'po_from_customer' || ms.stageOrder === 1 || index === 0;
                       const subsequentStartedOrCompleted = isStage1 && selectedLine.milestones.some((m, idx) => idx > 0 && (Boolean(m.actualStartDate) || Boolean(m.actualEndDate) || m.status === 'Completed'));
 
                       const prevMs = index > 0 ? selectedLine.milestones[index - 1] : null;
+                      const prevLineDone = index > 0 && po.productLines.length > 0 && po.productLines.every(line => {
+                        const pm = line.milestones.find(m => m.key === prevMs?.key || m.stageOrder === index);
+                        return pm?.status === 'Completed' || Boolean(pm?.actualEndDate);
+                      });
+                      const isPrevCompleted = index === 0 || prevMs?.status === 'Completed' || Boolean(prevMs?.actualEndDate) || prevLineDone;
+
                       const currVariance = Math.max(0, typeof ms.varianceDays === 'number' ? ms.varianceDays : 0);
                       const prevVariance = prevMs ? Math.max(0, typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0) : 0;
                       const addedDelayHere = Math.max(0, currVariance - prevVariance);
@@ -621,13 +627,19 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                       const isStarted = (Boolean(ms.actualStartDate) || productLineMilestones.some(p => p.isLineStarted)) && !isCompleted;
                       const isInProgress = (isStarted || ms.status === 'In Progress') && !isCompleted;
                       const isPendingBaseline = po.status === 'Baseline Pending';
-                      const activeStageIdx = selectedLine.milestones.findIndex(m => {
-                        const mIsStage1 = m.key === 'po_from_customer' || m.stageOrder === 1;
+
+                      // Find the first uncompleted milestone in the line
+                      const activeStageIdx = selectedLine.milestones.findIndex((m, mIdx) => {
+                        const mIsStage1 = m.key === 'po_from_customer' || m.stageOrder === 1 || mIdx === 0;
                         const mSubsequent = mIsStage1 && selectedLine.milestones.some((sub, subIdx) => subIdx > 0 && (Boolean(sub.actualStartDate) || Boolean(sub.actualEndDate) || sub.status === 'Completed'));
                         const mCompleted = m.status === 'Completed' || Boolean(m.actualEndDate) || isPoCompletedOrClosed || mSubsequent;
                         return !mCompleted;
                       });
-                      const isCurrent = !isPendingBaseline && !isPoCompletedOrClosed && index === activeStageIdx;
+
+                      // Current / Ready to Start milestone: either matches activeStageIdx OR is uncompleted with predecessor completed
+                      const isCurrent = !isPendingBaseline && !isPoCompletedOrClosed && !isCompleted && (
+                        index === activeStageIdx || (isPrevCompleted && (activeStageIdx === -1 || activeStageIdx >= index))
+                      );
                       const isUnstarted = !isCompleted && !isInProgress && !isStarted;
                       const isNewDelayFormedAtThisStage = !isUnstarted && addedDelayHere > 0;
                       const hasInheritedShift = currVariance > 0 && !isNewDelayFormedAtThisStage;
