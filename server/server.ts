@@ -338,7 +338,10 @@ app.get('/api/products', async (req: Request, res: Response) => {
       try {
         const prods = await loadProductsFromDb(pool, orgId);
         if (prods.length > 0) {
-          res.json(prods);
+          const memProds = (memoryState.cft_products as ProductMasterItem[]) || [];
+          const missingInDb = memProds.filter(mp => !prods.some(p => p.id === mp.id));
+          const merged = [...prods, ...missingInDb];
+          res.json(merged);
           return;
         }
       } catch {}
@@ -357,7 +360,16 @@ app.post('/api/products', async (req: Request, res: Response) => {
     const updated = [...current.filter(p => p.id !== prod.id), prod];
     memoryState.cft_products = updated;
     scheduleStateSave();
-    void syncStateToMySql(orgId, { cft_products: updated });
+
+    const pool = await getDbPool();
+    if (pool) {
+      try {
+        await saveProductsToDb(pool, orgId, updated);
+      } catch (err: any) {
+        console.warn(`[Products] MySQL sync notice: ${err.message}`);
+      }
+    }
+
     res.status(201).json(prod);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
