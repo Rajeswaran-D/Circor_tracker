@@ -21,8 +21,7 @@ export const BaselinePlanningModule: React.FC = () => {
       (line.milestones || []).length > 0 &&
       line.milestones.every((m, mIdx) => {
         const isStage1 = m.key === 'po_from_customer' || m.stageOrder === 1 || mIdx === 0;
-        const subsequentDone = isStage1 && line.milestones.some((other, oIdx) => oIdx > 0 && (other.status === 'Completed' || Boolean(other.actualEndDate)));
-        return m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100 || subsequentDone;
+        return isStage1 || m.status === 'Completed' || Boolean(m.actualEndDate) || m.completionPct === 100;
       })
     );
 

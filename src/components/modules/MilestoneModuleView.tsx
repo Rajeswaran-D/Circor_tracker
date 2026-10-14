@@ -163,6 +163,8 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
     const msIndex = (line.milestones || []).findIndex(m => m.key === targetMilestoneKey);
     if (msIndex <= 0) return true;
     const prevMs = line.milestones[msIndex - 1];
+    const isPrevStage1 = prevMs?.key === 'po_from_customer' || prevMs?.stageOrder === 1;
+    if (isPrevStage1) return true;
     return prevMs?.status === 'Completed' || Boolean(prevMs?.actualEndDate) || prevMs?.completionPct === 100;
   };
 
@@ -173,7 +175,8 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
     const linesWithMs = (po.productLines || []).map(line => {
       const milestone = (line.milestones || []).find(m => m.key === stageKey);
       const isPrereqDone = isPrereqComplete(line, stageKey);
-      const isDone = milestone?.status === 'Completed' || Boolean(milestone?.actualEndDate) || milestone?.completionPct === 100;
+      const isStage1 = milestone?.key === 'po_from_customer' || milestone?.stageOrder === 1 || stageKey === 'po_from_customer';
+      const isDone = isStage1 || milestone?.status === 'Completed' || Boolean(milestone?.actualEndDate) || milestone?.completionPct === 100;
       const isStarted = Boolean(milestone?.actualStartDate) && !isDone;
       const isDelayed = milestone?.status === 'Delayed' || (typeof milestone?.varianceDays === 'number' && milestone.varianceDays > 0);
       const isReadyToStart = isPrereqDone && !isStarted && !isDone;
@@ -1170,13 +1173,10 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                                   <span className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-rose-100 text-rose-800 border border-rose-300">
                                     Delay (+{stageDelta}d)
                                   </span>
-                                ) : hasInheritedShift ? (
-                                  <span className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300">
-                                    Previous (+{currVar}d)
-                                  </span>
                                 ) : (
-                                  <span className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-slate-100 text-slate-700 border border-slate-300">
-                                    Ready to Start
+                                  <span className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1 shadow-2xs">
+                                    <Play className="w-3 h-3 fill-current text-emerald-600" />
+                                    {hasInheritedShift ? `Ready to Start (Previous: +${currVar}d)` : 'Ready to Start'}
                                   </span>
                                 )}
 
@@ -1723,7 +1723,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                         {/* 14 Stages Chips */}
                         {ALL_14_STAGES.map((st, sIdx) => {
                           const ms = (line.milestones || []).find(m => m.key === st.key);
-                          const isStageDone = ms?.status === 'Completed' || Boolean(ms?.actualEndDate);
+                          const isStageDone = st.key === 'po_from_customer' || ms?.key === 'po_from_customer' || ms?.stageOrder === 1 || ms?.status === 'Completed' || Boolean(ms?.actualEndDate);
                           const isStageStarted = Boolean(ms?.actualStartDate) && !isStageDone;
                           const isStageDelayed = ms?.status === 'Delayed' || (typeof ms?.varianceDays === 'number' && ms.varianceDays > 0);
                           const isCurrentStageCol = st.key === stageKey;
@@ -1871,7 +1871,7 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
                   {batchModal.po.productLines.map((line, idx) => {
                     const isPrereqDone = isPrereqComplete(line, stageKey);
                     const ms = line.milestones.find(m => m.key === stageKey);
-                    const isDone = ms?.status === 'Completed' || Boolean(ms?.actualEndDate);
+                    const isDone = stageKey === 'po_from_customer' || ms?.key === 'po_from_customer' || ms?.stageOrder === 1 || ms?.status === 'Completed' || Boolean(ms?.actualEndDate);
                     const isChecked = batchModal.selectedLineIds.includes(line.id);
 
                     return (

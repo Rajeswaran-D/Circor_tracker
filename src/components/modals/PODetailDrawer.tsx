@@ -610,7 +610,6 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
 
                       const isPoCompletedOrClosed = po.status === 'Completed' || po.isClosed;
                       const isStage1 = ms.key === 'po_from_customer' || ms.stageOrder === 1 || index === 0;
-                      const subsequentStartedOrCompleted = isStage1 && selectedLine.milestones.some((m, idx) => idx > 0 && (Boolean(m.actualStartDate) || Boolean(m.actualEndDate) || m.status === 'Completed'));
 
                       const prevMs = index > 0 ? selectedLine.milestones[index - 1] : null;
                       const prevLineDone = index > 0 && po.productLines.length > 0 && po.productLines.every(line => {
@@ -622,17 +621,21 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                       const currVariance = Math.max(0, typeof ms.varianceDays === 'number' ? ms.varianceDays : 0);
                       const prevVariance = prevMs ? Math.max(0, typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0) : 0;
                       const addedDelayHere = Math.max(0, currVariance - prevVariance);
-                      const isCompleted = ms.status === 'Completed' || Boolean(ms.actualEndDate) || allLinesDone || isPoCompletedOrClosed || subsequentStartedOrCompleted;
+                      const isCompleted = isStage1 || ms.status === 'Completed' || Boolean(ms.actualEndDate) || allLinesDone || isPoCompletedOrClosed;
                       const recoveredDelay = isCompleted ? Math.max(0, prevVariance - currVariance) : 0;
                       const isStarted = (Boolean(ms.actualStartDate) || productLineMilestones.some(p => p.isLineStarted)) && !isCompleted;
                       const isInProgress = (isStarted || ms.status === 'In Progress') && !isCompleted;
                       const isPendingBaseline = po.status === 'Baseline Pending';
 
-                      // Find the first uncompleted milestone in the line
+                      // Find the first uncompleted milestone in the line (Stage 1 is already completed)
                       const activeStageIdx = selectedLine.milestones.findIndex((m, mIdx) => {
                         const mIsStage1 = m.key === 'po_from_customer' || m.stageOrder === 1 || mIdx === 0;
-                        const mSubsequent = mIsStage1 && selectedLine.milestones.some((sub, subIdx) => subIdx > 0 && (Boolean(sub.actualStartDate) || Boolean(sub.actualEndDate) || sub.status === 'Completed'));
-                        const mCompleted = m.status === 'Completed' || Boolean(m.actualEndDate) || isPoCompletedOrClosed || mSubsequent;
+                        if (mIsStage1) return false;
+                        const mAllDone = po.productLines.length > 0 && po.productLines.every(pl => {
+                          const pm = pl.milestones.find(x => x.key === m.key || x.stageOrder === mIdx + 1);
+                          return pm?.status === 'Completed' || Boolean(pm?.actualEndDate);
+                        });
+                        const mCompleted = m.status === 'Completed' || Boolean(m.actualEndDate) || mAllDone || isPoCompletedOrClosed;
                         return !mCompleted;
                       });
 
@@ -700,10 +703,12 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                                       : 'bg-emerald-50 border-emerald-200 text-emerald-800')
                                   : isNewDelayFormedAtThisStage 
                                   ? 'bg-rose-50 border-rose-200 text-rose-800 shadow-2xs font-bold'
-                                  : hasInheritedShift
-                                  ? 'bg-slate-100 border-slate-200 text-slate-600'
                                   : isInProgress 
                                   ? 'bg-blue-50 border-blue-200 text-blue-800 shadow-2xs'
+                                  : isCurrent 
+                                  ? 'bg-emerald-100 border-emerald-300 text-emerald-800 shadow-2xs font-bold'
+                                  : hasInheritedShift
+                                  ? 'bg-slate-100 border-slate-200 text-slate-600'
                                   : isPendingBaseline 
                                   ? 'bg-amber-50 border-amber-200 text-amber-800'
                                   : 'bg-slate-100 border-slate-200 text-slate-500'
@@ -720,14 +725,14 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                                       : 'Completed')
                                   : isNewDelayFormedAtThisStage 
                                   ? `Delay (+${addedDelayHere}d)`
-                                  : hasInheritedShift
-                                  ? (isInProgress ? `In Execution (Previous: +${currVariance}d)` : isCurrent ? `Ready to Start (Previous: +${currVariance}d)` : `Previous (+${currVariance}d)`)
                                   : isInProgress 
-                                  ? 'IN EXECUTION'
+                                  ? (hasInheritedShift ? `In Execution (Previous: +${currVariance}d)` : 'In Execution')
+                                  : isCurrent
+                                  ? (currVariance > 0 ? `Ready to Start (Previous: +${currVariance}d)` : 'Ready to Start')
+                                  : hasInheritedShift
+                                  ? `Previous (+${currVariance}d)`
                                   : isPendingBaseline 
                                   ? 'Baseline Pending'
-                                  : isCurrent
-                                  ? 'Ready to Start'
                                   : 'Not Started'}
                               </span>
                             </div>

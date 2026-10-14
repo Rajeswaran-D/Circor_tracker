@@ -295,14 +295,11 @@ function repairMilestonesTo14Aligned(
       runningChainDate = addDays(msEnd, 1);
 
       const isStage1 = def.key === 'po_from_customer' || idx === 0;
-      const hasSubsequentProgress = isStage1 && cleanExistingMilestones.some((m, mIdx) => 
-        mIdx > 0 && (Boolean(m.actualStartDate) || Boolean(m.actualEndDate) || m.status === 'Completed')
-      );
-      const stage1Start = isStage1 && hasSubsequentProgress
-        ? (existing?.actualStartDate || msStart)
+      const stage1Start = isStage1
+        ? (existing?.actualStartDate || poDate || msStart)
         : existing?.actualStartDate;
-      const stage1End = isStage1 && hasSubsequentProgress
-        ? (existing?.actualEndDate || stage1Start || msStart)
+      const stage1End = isStage1
+        ? (existing?.actualEndDate || stage1Start || poDate || msStart)
         : existing?.actualEndDate;
 
       return {
@@ -318,8 +315,10 @@ function repairMilestonesTo14Aligned(
         actualEndDate: stage1End,
         forecastStartDate: existing.forecastStartDate || stage1Start || msStart,
         forecastEndDate: existing.forecastEndDate || stage1End || msEnd,
-        status: (isStage1 && hasSubsequentProgress) ? ('Completed' as MilestoneStatus) : (stage1End ? ('Completed' as MilestoneStatus) : (existing?.status || 'Not Started')),
-        completionPct: (isStage1 && hasSubsequentProgress) ? 100 : (stage1End ? 100 : (existing?.completionPct || 0))
+        varianceDays: isStage1 ? 0 : (existing?.varianceDays || 0),
+        status: isStage1 ? ('Completed' as MilestoneStatus) : (stage1End ? ('Completed' as MilestoneStatus) : (existing?.status || ('Not Started' as MilestoneStatus))),
+        completionPct: isStage1 ? 100 : (stage1End ? 100 : (existing?.completionPct || (existing?.status === 'Completed' ? 100 : 0))),
+        docRef: isStage1 ? (existing?.docRef || 'PO-INTAKE') : existing?.docRef
       };
     });
   }
@@ -364,14 +363,11 @@ function repairMilestonesTo14Aligned(
     const msStart = runningDate;
     const msEnd = addDays(msStart, duration - 1);
     const isStage1 = def.key === 'po_from_customer' || idx === 0;
-    const hasSubsequentProgress = isStage1 && cleanExistingMilestones.some((m, mIdx) => 
-      mIdx > 0 && (Boolean(m.actualStartDate) || Boolean(m.actualEndDate) || m.status === 'Completed')
-    );
-    const stage1Start = isStage1 && hasSubsequentProgress
-      ? (existing?.actualStartDate || msStart)
+    const stage1Start = isStage1
+      ? (existing?.actualStartDate || poDate || msStart)
       : existing?.actualStartDate;
-    const stage1End = isStage1 && hasSubsequentProgress
-      ? (existing?.actualEndDate || stage1Start || msStart)
+    const stage1End = isStage1
+      ? (existing?.actualEndDate || stage1Start || poDate || msStart)
       : existing?.actualEndDate;
 
     return {
@@ -387,10 +383,10 @@ function repairMilestonesTo14Aligned(
       actualEndDate: stage1End,
       forecastStartDate: existing?.forecastStartDate || stage1Start || msStart,
       forecastEndDate: existing?.forecastEndDate || stage1End || msEnd,
-      varianceDays: existing?.varianceDays || 0,
-      status: (isStage1 && hasSubsequentProgress) ? ('Completed' as MilestoneStatus) : (stage1End ? ('Completed' as MilestoneStatus) : (existing?.status || ('Not Started' as MilestoneStatus))),
-      completionPct: (isStage1 && hasSubsequentProgress) ? 100 : (stage1End ? 100 : (existing?.completionPct || (existing?.status === 'Completed' ? 100 : 0))),
-      docRef: existing?.docRef,
+      varianceDays: isStage1 ? 0 : (existing?.varianceDays || 0),
+      status: isStage1 ? ('Completed' as MilestoneStatus) : (stage1End ? ('Completed' as MilestoneStatus) : (existing?.status || ('Not Started' as MilestoneStatus))),
+      completionPct: isStage1 ? 100 : (stage1End ? 100 : (existing?.completionPct || (existing?.status === 'Completed' ? 100 : 0))),
+      docRef: isStage1 ? (existing?.docRef || 'PO-INTAKE') : existing?.docRef,
       delayCategory: existing?.delayCategory,
       delayOwner: existing?.delayOwner,
       delayReason: existing?.delayReason
