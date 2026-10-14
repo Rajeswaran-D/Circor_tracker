@@ -621,7 +621,11 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                       const currVariance = Math.max(0, typeof ms.varianceDays === 'number' ? ms.varianceDays : 0);
                       const prevVariance = prevMs ? Math.max(0, typeof prevMs.varianceDays === 'number' ? prevMs.varianceDays : 0) : 0;
                       const addedDelayHere = Math.max(0, currVariance - prevVariance);
-                      const isCompleted = isStage1 || ms.status === 'Completed' || Boolean(ms.actualEndDate) || allLinesDone || isPoCompletedOrClosed;
+                      const hasSubsequentProgress = selectedLine.milestones.some((m, mIdx) => {
+                        const order = m.stageOrder || (mIdx + 1);
+                        return order > (index + 1) && (m.status === 'Completed' || Boolean(m.actualEndDate) || Boolean(m.actualStartDate) || m.status === 'In Progress');
+                      });
+                      const isCompleted = isStage1 || ms.status === 'Completed' || Boolean(ms.actualEndDate) || allLinesDone || isPoCompletedOrClosed || hasSubsequentProgress;
                       const recoveredDelay = isCompleted ? Math.max(0, prevVariance - currVariance) : 0;
                       const isStarted = (Boolean(ms.actualStartDate) || productLineMilestones.some(p => p.isLineStarted)) && !isCompleted;
                       const isInProgress = (isStarted || ms.status === 'In Progress') && !isCompleted;
@@ -631,20 +635,24 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                         (m.key === 'pm_baseline' || m.key === 'baseline_review' || m.stageOrder === 2) &&
                         (m.status === 'Completed' || Boolean(m.actualEndDate))
                       );
-                      const hasSubsequentProgress = selectedLine.milestones.some(m =>
+                      const anySubsequentProgress = selectedLine.milestones.some(m =>
                         m.stageOrder > 2 && (m.status === 'Completed' || Boolean(m.actualStartDate) || Boolean(m.actualEndDate))
                       );
-                      const isPendingBaseline = (po.status === 'Baseline Pending') && !isStage2Done && !hasSubsequentProgress;
+                      const isPendingBaseline = (po.status === 'Baseline Pending') && !isStage2Done && !anySubsequentProgress;
 
                       // Find the first uncompleted milestone in the line (Stage 1 is already completed)
                       const activeStageIdx = selectedLine.milestones.findIndex((m, mIdx) => {
                         const mIsStage1 = m.key === 'po_from_customer' || m.stageOrder === 1 || mIdx === 0;
                         if (mIsStage1) return false;
+                        const mHasSubsequentProgress = selectedLine.milestones.some((x, xIdx) => {
+                          const order = x.stageOrder || (xIdx + 1);
+                          return order > (mIdx + 1) && (x.status === 'Completed' || Boolean(x.actualEndDate) || Boolean(x.actualStartDate) || x.status === 'In Progress');
+                        });
                         const mAllDone = po.productLines.length > 0 && po.productLines.every(pl => {
                           const pm = pl.milestones.find(x => x.key === m.key || x.stageOrder === mIdx + 1);
                           return pm?.status === 'Completed' || Boolean(pm?.actualEndDate);
                         });
-                        const mCompleted = m.status === 'Completed' || Boolean(m.actualEndDate) || mAllDone || isPoCompletedOrClosed;
+                        const mCompleted = m.status === 'Completed' || Boolean(m.actualEndDate) || mAllDone || isPoCompletedOrClosed || mHasSubsequentProgress;
                         return !mCompleted;
                       });
 
@@ -657,9 +665,6 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                       const hasInheritedShift = currVariance > 0 && !isNewDelayFormedAtThisStage;
                       const friendlyName = getStageFriendlyName(ms.key, selectedLine);
 
-                      const effectiveActualStart = ms.actualStartDate || (isStage1 ? (ms.committedBaselineStartDate || po.poDate) : undefined);
-                      const effectiveActualEnd = ms.actualEndDate || (isStage1 ? (ms.committedBaselineEndDate || ms.committedBaselineStartDate || po.poDate) : undefined);
-
                       const {
                         revisedStart,
                         revisedEnd,
@@ -668,6 +673,9 @@ export const PODetailDrawer: React.FC<PODetailDrawerProps> = ({
                         baselineEnd: bEnd,
                         baselineDuration
                       } = getMilestoneRevisedDates(ms, prevMs, po.poDate, po.committedDeliveryDate);
+
+                      const effectiveActualStart = ms.actualStartDate || (isStage1 ? (ms.committedBaselineStartDate || po.poDate) : hasSubsequentProgress ? (ms.committedBaselineStartDate || bStart) : undefined);
+                      const effectiveActualEnd = ms.actualEndDate || (isStage1 ? (ms.committedBaselineEndDate || ms.committedBaselineStartDate || po.poDate) : hasSubsequentProgress ? (ms.committedBaselineEndDate || bEnd) : undefined);
 
                       const prevRevDates = prevMs ? getMilestoneRevisedDates(prevMs, index > 1 ? selectedLine.milestones[index - 2] : null, po.poDate, po.committedDeliveryDate) : null;
                       const prevEffectiveEnd = prevMs?.actualEndDate || prevRevDates?.revisedEnd || prevMs?.forecastEndDate;

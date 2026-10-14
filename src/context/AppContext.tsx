@@ -367,12 +367,17 @@ function repairMilestonesTo14Aligned(
       runningChainDate = addDays(msEnd, 1);
 
       const isStage1 = def.key === 'po_from_customer' || idx === 0;
+      const hasLaterProgress = cleanExistingMilestones.some((m, mIdx) => {
+        const order = m.stageOrder || (mIdx + 1);
+        return order > (idx + 1) && (m.status === 'Completed' || Boolean(m.actualEndDate) || Boolean(m.actualStartDate) || m.status === 'In Progress');
+      });
       const stage1Start = isStage1
         ? (existing?.actualStartDate || poDate || msStart)
-        : existing?.actualStartDate;
+        : (existing?.actualStartDate || (hasLaterProgress ? (existing?.committedBaselineStartDate || msStart) : undefined));
       const stage1End = isStage1
         ? (existing?.actualEndDate || stage1Start || poDate || msStart)
-        : existing?.actualEndDate;
+        : (existing?.actualEndDate || (hasLaterProgress ? (existing?.committedBaselineEndDate || msEnd) : undefined));
+      const isEffectivelyCompleted = isStage1 || Boolean(stage1End) || (hasLaterProgress && Boolean(stage1Start));
 
       return {
         ...existing,
@@ -388,8 +393,8 @@ function repairMilestonesTo14Aligned(
         forecastStartDate: existing.forecastStartDate || stage1Start || msStart,
         forecastEndDate: existing.forecastEndDate || stage1End || msEnd,
         varianceDays: isStage1 ? 0 : (existing?.varianceDays || 0),
-        status: isStage1 ? ('Completed' as MilestoneStatus) : (stage1End ? ('Completed' as MilestoneStatus) : (existing?.status || ('Not Started' as MilestoneStatus))),
-        completionPct: isStage1 ? 100 : (stage1End ? 100 : (existing?.completionPct || (existing?.status === 'Completed' ? 100 : 0))),
+        status: isEffectivelyCompleted ? ('Completed' as MilestoneStatus) : (stage1Start ? ('In Progress' as MilestoneStatus) : (existing?.status || ('Not Started' as MilestoneStatus))),
+        completionPct: isEffectivelyCompleted ? 100 : (stage1Start ? Math.max(existing?.completionPct || 50, 50) : (existing?.completionPct || 0)),
         docRef: isStage1 ? (existing?.docRef || 'PO-INTAKE') : existing?.docRef
       };
     });
@@ -434,13 +439,19 @@ function repairMilestonesTo14Aligned(
     const duration = scaledDurations[idx];
     const msStart = runningDate;
     const msEnd = addDays(msStart, duration - 1);
+    runningDate = addDays(msEnd, 1);
     const isStage1 = def.key === 'po_from_customer' || idx === 0;
+    const hasLaterProgress = cleanExistingMilestones.some((m, mIdx) => {
+      const order = m.stageOrder || (mIdx + 1);
+      return order > (idx + 1) && (m.status === 'Completed' || Boolean(m.actualEndDate) || Boolean(m.actualStartDate) || m.status === 'In Progress');
+    });
     const stage1Start = isStage1
       ? (existing?.actualStartDate || poDate || msStart)
-      : existing?.actualStartDate;
+      : (existing?.actualStartDate || (hasLaterProgress ? (existing?.committedBaselineStartDate || msStart) : undefined));
     const stage1End = isStage1
       ? (existing?.actualEndDate || stage1Start || poDate || msStart)
-      : existing?.actualEndDate;
+      : (existing?.actualEndDate || (hasLaterProgress ? (existing?.committedBaselineEndDate || msEnd) : undefined));
+    const isEffectivelyCompleted = isStage1 || Boolean(stage1End) || (hasLaterProgress && Boolean(stage1Start));
 
     return {
       id: `ms-${lineId}-${def.key}`,
@@ -456,8 +467,8 @@ function repairMilestonesTo14Aligned(
       forecastStartDate: existing?.forecastStartDate || stage1Start || msStart,
       forecastEndDate: existing?.forecastEndDate || stage1End || msEnd,
       varianceDays: isStage1 ? 0 : (existing?.varianceDays || 0),
-      status: isStage1 ? ('Completed' as MilestoneStatus) : (stage1End ? ('Completed' as MilestoneStatus) : (existing?.status || ('Not Started' as MilestoneStatus))),
-      completionPct: isStage1 ? 100 : (stage1End ? 100 : (existing?.completionPct || (existing?.status === 'Completed' ? 100 : 0))),
+      status: isEffectivelyCompleted ? ('Completed' as MilestoneStatus) : (stage1Start ? ('In Progress' as MilestoneStatus) : (existing?.status || ('Not Started' as MilestoneStatus))),
+      completionPct: isEffectivelyCompleted ? 100 : (stage1Start ? Math.max(existing?.completionPct || 50, 50) : (existing?.completionPct || 0)),
       docRef: isStage1 ? (existing?.docRef || 'PO-INTAKE') : existing?.docRef,
       delayCategory: existing?.delayCategory,
       delayOwner: existing?.delayOwner,
@@ -1306,22 +1317,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return newMs;
         });
 
-        // After completing, cascade the completion date into the next milestone's start
-        if (item.eventType === 'complete') {
-          // Ensure Stage 1 (Customer Purchase Order) is marked completed if it was left uncompleted
-          const s1Idx = updatedMsList.findIndex(m => m.key === 'po_from_customer' || m.stageOrder === 1);
-          if (s1Idx >= 0 && (!updatedMsList[s1Idx].actualEndDate || updatedMsList[s1Idx].status !== 'Completed')) {
-            const s1Date = updatedMsList[s1Idx].actualStartDate || updatedMsList[s1Idx].committedBaselineStartDate || p.poDate || todayStr;
-            updatedMsList[s1Idx] = {
-              ...updatedMsList[s1Idx],
-              actualStartDate: s1Date,
-              actualEndDate: s1Date,
-              forecastStartDate: s1Date,
-              forecastEndDate: s1Date,
-              status: 'Completed' as MilestoneStatus,
-              completionPct: 100
-            };
+        // When completing or starting a milestone, auto-complete any uncompleted preceding milestones
+        if (item.eventType === 'complete' || item.eventType === 'start') {
+          for (let pIdx = 0; pIdx < currentMsIndex; pIdx++) {
+            const pm = updatedMsList[pIdx];
+            if (!pm.actualEndDate || pm.status !== 'Completed') {
+              const prevCompletedEnd = pIdx > 0
+                ? (updatedMsList[pIdx - 1].actualEndDate || updatedMsList[pIdx - 1].forecastEndDate || p.poDate || todayStr)
+                : (p.poDate || todayStr);
+              const pStart = pm.actualStartDate || pm.committedBaselineStartDate || prevCompletedEnd;
+              const pEnd = pm.actualEndDate || pm.committedBaselineEndDate || (pStart ? addDays(pStart, Math.max(0, pm.committedDurationDays - 1)) : item.eventDate);
+              updatedMsList[pIdx] = {
+                ...pm,
+                actualStartDate: pStart,
+                actualEndDate: pEnd,
+                forecastStartDate: pStart,
+                forecastEndDate: pEnd,
+                status: 'Completed' as MilestoneStatus,
+                completionPct: 100,
+                docRef: pm.docRef || (pIdx === 0 ? 'PO-INTAKE' : 'PM-AUTO-APPROVED')
+              };
+            }
           }
+        }
+        if (item.eventType === 'complete') {
           updatedMsList = cascadeNextMilestoneStart(updatedMsList, currentMsIndex, item.eventDate, item.user);
         }
 

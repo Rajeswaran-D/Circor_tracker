@@ -165,7 +165,11 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
     const prevMs = line.milestones[msIndex - 1];
     const isPrevStage1 = prevMs?.key === 'po_from_customer' || prevMs?.stageOrder === 1;
     if (isPrevStage1) return true;
-    return prevMs?.status === 'Completed' || Boolean(prevMs?.actualEndDate) || prevMs?.completionPct === 100;
+    const prevHasSubsequent = (line.milestones || []).some((m, mIdx) => {
+      const order = m.stageOrder || (mIdx + 1);
+      return order > msIndex && (m.status === 'Completed' || Boolean(m.actualEndDate) || Boolean(m.actualStartDate) || m.status === 'In Progress');
+    });
+    return prevMs?.status === 'Completed' || Boolean(prevMs?.actualEndDate) || prevMs?.completionPct === 100 || prevHasSubsequent;
   };
 
   // Group purchase orders and calculate stage rollup data
@@ -187,7 +191,12 @@ export const MilestoneModuleView: React.FC<MilestoneModuleViewProps> = ({
       const milestone = (line.milestones || []).find(m => m.key === stageKey);
       const isPrereqDone = isPrereqComplete(line, stageKey);
       const isStage1 = milestone?.key === 'po_from_customer' || milestone?.stageOrder === 1 || stageKey === 'po_from_customer';
-      const isDone = isStage1 || milestone?.status === 'Completed' || Boolean(milestone?.actualEndDate) || milestone?.completionPct === 100;
+      const hasSubsequent = (line.milestones || []).some((m, mIdx) => {
+        const order = m.stageOrder || (mIdx + 1);
+        const curOrder = milestone?.stageOrder || ((line.milestones || []).findIndex(x => x.key === stageKey) + 1);
+        return order > curOrder && (m.status === 'Completed' || Boolean(m.actualEndDate) || Boolean(m.actualStartDate) || m.status === 'In Progress');
+      });
+      const isDone = isStage1 || milestone?.status === 'Completed' || Boolean(milestone?.actualEndDate) || milestone?.completionPct === 100 || hasSubsequent;
       const isStarted = Boolean(milestone?.actualStartDate) && !isDone;
       const isDelayed = milestone?.status === 'Delayed' || (typeof milestone?.varianceDays === 'number' && milestone.varianceDays > 0);
       const isReadyToStart = isPrereqDone && !isStarted && !isDone;
