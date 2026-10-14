@@ -193,18 +193,14 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const storageConfig = getStorageConfig();
 const sharedStateKeys = STORAGE_KEYS;
-const sharedStateEndpoint = getSharedStateEndpoint(storageConfig);
 
 const deleteOrderOnServer = (poId: string) => {
-  // Fire-and-forget server delete; authoritative refresh arrives via the
-  // shared-state poll. Failures only log — local state is already pruned so
-  // the UI never shows a row the user just deleted.
-  fetch(`${storageConfig.apiBaseUrl.replace(/\/$/, '')}/orders/${encodeURIComponent(poId)}`, {
+  const config = getStorageConfig();
+  fetch(`${config.apiBaseUrl.replace(/\/$/, '')}/orders/${encodeURIComponent(poId)}`, {
     method: 'DELETE',
     headers: {
-      'X-Organization-Id': storageConfig.organizationId
+      'X-Organization-Id': config.organizationId
     }
   }).catch(() => undefined);
 };
@@ -249,15 +245,24 @@ const stripRecentlyDeleted = (orders: PurchaseOrder[]): PurchaseOrder[] => {
   return orders.filter(o => !deletedSet.has(o.id));
 };
 
-const saveSharedState = (key: string, value: unknown) => {
-  fetch(sharedStateEndpoint, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Organization-Id': storageConfig.organizationId
-    },
-    body: JSON.stringify({ [key]: value })
-  }).catch(() => undefined);
+const saveSharedState = async (key: string, value: unknown) => {
+  const config = getStorageConfig();
+  const endpoint = getSharedStateEndpoint(config);
+  try {
+    const res = await fetch(endpoint, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Organization-Id': config.organizationId
+      },
+      body: JSON.stringify({ [key]: value })
+    });
+    if (!res.ok) {
+      console.warn(`[Storage Sync Warning] PUT ${endpoint} returned status ${res.status}`);
+    }
+  } catch (err) {
+    console.warn(`[Storage Sync Network Error] Failed to persist ${key} to ${endpoint}:`, err);
+  }
 };
 const getPurchaseOrderStatus = (productLines: PurchaseOrder['productLines'], isClosed = false): PurchaseOrder['status'] => {
   if (isClosed) return 'Closed';
@@ -762,10 +767,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const syncFromServer = async () => {
       try {
-        const response = await fetch(sharedStateEndpoint, {
-          headers: { 'X-Organization-Id': storageConfig.organizationId }
+        const config = getStorageConfig();
+        const endpoint = getSharedStateEndpoint(config);
+        const response = await fetch(endpoint, {
+          headers: { 'X-Organization-Id': config.organizationId }
         });
         if (!response.ok) {
+          setSharedStateReady(true);
+          setBackendStatus('offline');
+          return;
+        }
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
           setSharedStateReady(true);
           setBackendStatus('offline');
           return;
@@ -815,20 +828,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   }
                 } else {
                   const sOrder = sharedIdMap.get(lOrder.id);
-                  if (sOrder && lOrder.lastUpdatedAt && sOrder.lastUpdatedAt && lOrder.lastUpdatedAt > sOrder.lastUpdatedAt) {
-                    const idx = mergedOrders.findIndex(o => o.id === lOrder.id);
-                    if (idx >= 0) mergedOrders[idx] = lOrder;
+                  if (sOrder) {
+                    const lTs = lOrder.lastUpdatedAt || '';
+                    const sTs = sOrder.lastUpdatedAt || '';
+                    const localCompletedCount = (lOrder.productLines || []).reduce((acc, l) => 
+                      acc + (l.milestones || []).filter(m => m.status === 'Completed' || m.actualEndDate).length, 0);
+                    const sharedCompletedCount = (sOrder.productLines || []).reduce((acc, l) => 
+                      acc + (l.milestones || []).filter(m => m.status === 'Completed' || m.actualEndDate).length, 0);
+
+                    if (lTs > sTs || (lTs === sTs && localCompletedCount > sharedCompletedCount)) {
+                      const idx = mergedOrders.findIndex(o => o.id === lOrder.id);
+                      if (idx >= 0) mergedOrders[idx] = lOrder;
+                    }
                   }
                 }
               }
-              const localLatest = localOrders.reduce((latest, order) => order.lastUpdatedAt > latest ? order.lastUpdatedAt : latest, '');
-              const sharedLatest = sharedOrders.reduce((latest, order) => order.lastUpdatedAt > latest ? order.lastUpdatedAt : latest, '');
+              const localLatest = localOrders.reduce((latest, order) => (order.lastUpdatedAt || '') > latest ? (order.lastUpdatedAt || '') : latest, '');
+              const sharedLatest = sharedOrders.reduce((latest, order) => (order.lastUpdatedAt || '') > latest ? (order.lastUpdatedAt || '') : latest, '');
               
               if (hasLocalOnly || localLatest > sharedLatest) {
                 const mergedSerialized = JSON.stringify(mergedOrders);
                 localStorage.setItem(key, mergedSerialized);
                 applyStoredState(key, mergedSerialized);
-                saveSharedState(key, mergedOrders);
+                void saveSharedState(key, mergedOrders);
                 return;
               }
             } catch {

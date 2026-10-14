@@ -230,7 +230,27 @@ app.get('/api/shared-state', async (req: Request, res: Response) => {
       // Other collections keep the old non-empty guard to avoid clobbering local
       // edits when a loader transiently fails.
       if (orders) {
-        mergedState.cft_pos = stripTombstonedOrders(orders);
+        const dbOrders = stripTombstonedOrders(orders);
+        const memOrders = Array.isArray(memoryState.cft_pos)
+          ? stripTombstonedOrders(memoryState.cft_pos as PurchaseOrder[])
+          : [];
+        const orderMap = new Map<string, PurchaseOrder>();
+        for (const o of dbOrders) {
+          orderMap.set(o.id, o);
+        }
+        for (const mo of memOrders) {
+          if (!orderMap.has(mo.id)) {
+            orderMap.set(mo.id, mo);
+          } else {
+            const dbo = orderMap.get(mo.id)!;
+            const memTs = mo.lastUpdatedAt ? new Date(mo.lastUpdatedAt).getTime() : 0;
+            const dbTs = dbo.lastUpdatedAt ? new Date(dbo.lastUpdatedAt).getTime() : 0;
+            if (memTs > dbTs) {
+              orderMap.set(mo.id, mo);
+            }
+          }
+        }
+        mergedState.cft_pos = Array.from(orderMap.values());
       }
       if (products && products.length > 0) mergedState.cft_products = products;
       if (templates && templates.length > 0) mergedState.cft_templates = templates;

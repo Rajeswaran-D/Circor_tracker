@@ -70,6 +70,45 @@ export async function initSchema(pool: Pool): Promise<{ success: boolean; execut
     await ensureOrganization(conn, DEFAULT_ORG_ID, 'CIRCOR Flow Technologies');
     await ensureOrganization(conn, 'local-development', 'Local Development Org');
 
+    // Safely widen existing tables from CHAR(36) to VARCHAR(128) to prevent ER_DATA_TOO_LONG
+    try {
+      await conn.query('SET FOREIGN_KEY_CHECKS = 0');
+      const tablesToWiden = [
+        ['organizations', ['id']],
+        ['users', ['id', 'organization_id']],
+        ['purchase_orders', ['id', 'organization_id', 'created_by', 'last_updated_by']],
+        ['po_attachments', ['id', 'organization_id', 'purchase_order_id', 'uploaded_by']],
+        ['product_lines', ['id', 'organization_id', 'purchase_order_id']],
+        ['milestones', ['id', 'organization_id', 'product_line_id', 'last_updated_by']],
+        ['materials', ['id', 'organization_id', 'product_line_id', 'updated_by']],
+        ['baseline_revisions', ['id', 'organization_id', 'purchase_order_id', 'requested_by', 'approved_by']],
+        ['baseline_revision_changes', ['id', 'organization_id', 'baseline_revision_id', 'product_line_id']],
+        ['product_catalog', ['id', 'organization_id']],
+        ['product_catalog_materials', ['id', 'organization_id', 'product_id']],
+        ['category_templates', ['id', 'organization_id']],
+        ['category_template_milestones', ['id', 'organization_id', 'template_id']],
+        ['rectification_actions', ['id', 'organization_id', 'purchase_order_id', 'product_line_id', 'decision_by']],
+        ['system_config', ['organization_id']],
+        ['audit_logs', ['id', 'organization_id', 'purchase_order_id', 'user_id']],
+        ['subdivisions', ['id', 'organization_id', 'milestone_id', 'owner_user_id']],
+        ['po_slot_assignments', ['id', 'organization_id', 'purchase_order_id', 'user_id']],
+        ['cancellation_requests', ['id', 'organization_id', 'purchase_order_id']]
+      ];
+      for (const [table, cols] of tablesToWiden) {
+        for (const col of cols as string[]) {
+          try {
+            await conn.query(`ALTER TABLE \`${table}\` MODIFY \`${col}\` VARCHAR(128)`);
+          } catch {}
+        }
+      }
+    } catch {
+      // Non-fatal if DB user lacks alter permissions
+    } finally {
+      try {
+        await conn.query('SET FOREIGN_KEY_CHECKS = 1');
+      } catch {}
+    }
+
     return { success: true, executedCount };
   } finally {
     conn.release();
@@ -163,65 +202,6 @@ export async function saveOrdersToDb(pool: Pool, orgId: string, orders: Purchase
         }
       }
 
-      // Save Baseline Revisions + change rows (frontend stores display names, not user FKs)
-      if (Array.isArray(po.revisions)) {
-        for (const rev of po.revisions) {
-          const revId = `${po.id}-rev-${rev.revNumber}`;
-          await conn.query(
-            `INSERT INTO baseline_revisions (
-               id, organization_id, purchase_order_id, revision_number, reason,
-               document_reference, requested_by, approved_by, approved_at
-             ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)
-             ON DUPLICATE KEY UPDATE
-               reason = VALUES(reason),
-               document_reference = VALUES(document_reference),
-               approved_at = VALUES(approved_at)`,
-            [
-              revId,
-              orgId,
-              po.id,
-              rev.revNumber,
-              rev.reason || '',
-              rev.docRef || '',
-              rev.approvedAt ? new Date(rev.approvedAt) : new Date()
-            ]
-          );
-
-          if (Array.isArray(rev.changes)) {
-            for (const ch of rev.changes) {
-              const changeId = `${revId}-${ch.lineId}-${ch.milestoneKey}`;
-              // Resolve product_line FK; skip orphan change rows rather than failing the order.
-              const [lineRows] = await conn.query<any[]>(
-                `SELECT id FROM product_lines WHERE id = ? LIMIT 1`,
-                [ch.lineId]
-              );
-              if (!lineRows || lineRows.length === 0) continue;
-              await conn.query(
-                `INSERT INTO baseline_revision_changes (
-                   id, organization_id, baseline_revision_id, product_line_id, milestone_key,
-                   old_duration_days, new_duration_days, old_baseline_end_date, new_baseline_end_date
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                 ON DUPLICATE KEY UPDATE
-                   old_duration_days = VALUES(old_duration_days),
-                   new_duration_days = VALUES(new_duration_days),
-                   old_baseline_end_date = VALUES(old_baseline_end_date),
-                   new_baseline_end_date = VALUES(new_baseline_end_date)`,
-                [
-                  changeId,
-                  orgId,
-                  revId,
-                  ch.lineId,
-                  ch.milestoneKey,
-                  ch.oldDuration ?? 0,
-                  ch.newDuration ?? 0,
-                  ch.oldBaselineEnd ? ch.oldBaselineEnd.slice(0, 10) : poDate,
-                  ch.newBaselineEnd ? ch.newBaselineEnd.slice(0, 10) : committedDate
-                ]
-              );
-            }
-          }
-        }
-      }
 
       // Save Product Lines
       if (Array.isArray(po.productLines)) {
@@ -420,6 +400,66 @@ export async function saveOrdersToDb(pool: Pool, orgId: string, orders: Purchase
                   mat.grnNumber || null,
                   mat.inspectionResult || 'Pending',
                   mat.inspectionNotes || null
+                ]
+              );
+            }
+          }
+        }
+      }
+
+      // Save Baseline Revisions + change rows (after product_lines exist for FK resolution)
+      if (Array.isArray(po.revisions)) {
+        for (const rev of po.revisions) {
+          const revId = `${po.id}-rev-${rev.revNumber}`.slice(0, 120);
+          await conn.query(
+            `INSERT INTO baseline_revisions (
+               id, organization_id, purchase_order_id, revision_number, reason,
+               document_reference, requested_by, approved_by, approved_at
+             ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+             ON DUPLICATE KEY UPDATE
+               reason = VALUES(reason),
+               document_reference = VALUES(document_reference),
+               approved_at = VALUES(approved_at)`,
+            [
+              revId,
+              orgId,
+              po.id,
+              rev.revNumber,
+              rev.reason || '',
+              rev.docRef || '',
+              rev.approvedAt ? new Date(rev.approvedAt) : new Date()
+            ]
+          );
+
+          if (Array.isArray(rev.changes)) {
+            for (const ch of rev.changes) {
+              const changeId = `${revId}-${ch.lineId}-${ch.milestoneKey}`.slice(0, 120);
+              // Resolve product_line FK; skip orphan change rows rather than failing the order.
+              const [lineRows] = await conn.query<any[]>(
+                `SELECT id FROM product_lines WHERE id = ? LIMIT 1`,
+                [ch.lineId]
+              );
+              if (!lineRows || lineRows.length === 0) continue;
+              await conn.query(
+                `INSERT INTO baseline_revision_changes (
+                   id, organization_id, baseline_revision_id, product_line_id, milestone_key,
+                   old_duration_days, new_duration_days, old_baseline_end_date, new_baseline_end_date
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE
+                   old_duration_days = VALUES(old_duration_days),
+                   new_duration_days = VALUES(new_duration_days),
+                   old_baseline_end_date = VALUES(old_baseline_end_date),
+                   new_baseline_end_date = VALUES(new_baseline_end_date)`,
+                [
+                  changeId,
+                  orgId,
+                  revId,
+                  ch.lineId,
+                  ch.milestoneKey,
+                  ch.oldDuration ?? 0,
+                  ch.newDuration ?? 0,
+                  ch.oldBaselineEnd ? ch.oldBaselineEnd.slice(0, 10) : poDate,
+                  ch.newBaselineEnd ? ch.newBaselineEnd.slice(0, 10) : committedDate
                 ]
               );
             }

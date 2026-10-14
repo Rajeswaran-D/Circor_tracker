@@ -5,15 +5,15 @@ SET NAMES utf8mb4;
 SET time_zone = '+00:00';
 
 CREATE TABLE organizations (
-  id CHAR(36) PRIMARY KEY,
+  id VARCHAR(128) PRIMARY KEY,
   name VARCHAR(160) NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
 CREATE TABLE users (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
   email VARCHAR(255) NOT NULL,
   display_name VARCHAR(160) NOT NULL,
   role VARCHAR(40) NOT NULL,
@@ -23,8 +23,8 @@ CREATE TABLE users (
 );
 
 CREATE TABLE purchase_orders (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
   po_number VARCHAR(80) NOT NULL,
   customer_name VARCHAR(255) NOT NULL,
   customer_po_ref VARCHAR(120) NOT NULL,
@@ -41,8 +41,8 @@ CREATE TABLE purchase_orders (
   cancelled_at TIMESTAMP NULL,
   cancelled_by VARCHAR(160) NULL,
   cancellation_reason TEXT NULL,
-  created_by CHAR(36) NULL,
-  last_updated_by CHAR(36) NULL,
+  created_by VARCHAR(128) NULL,
+  last_updated_by VARCHAR(128) NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_purchase_orders_org_number (organization_id, po_number),
@@ -55,13 +55,13 @@ CREATE TABLE purchase_orders (
 );
 
 CREATE TABLE po_attachments (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
-  purchase_order_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
+  purchase_order_id VARCHAR(128) NOT NULL,
   file_name VARCHAR(255) NOT NULL,
   attachment_type VARCHAR(80) NOT NULL,
   file_size VARCHAR(40) NOT NULL,
-  uploaded_by CHAR(36) NULL,
+  uploaded_by VARCHAR(128) NULL,
   uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_attachments_organization FOREIGN KEY (organization_id) REFERENCES organizations(id),
   CONSTRAINT fk_attachments_order FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE,
@@ -69,9 +69,9 @@ CREATE TABLE po_attachments (
 );
 
 CREATE TABLE product_lines (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
-  purchase_order_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
+  purchase_order_id VARCHAR(128) NOT NULL,
   line_number VARCHAR(40) NOT NULL,
   product_name VARCHAR(255) NOT NULL,
   category VARCHAR(160) NOT NULL,
@@ -86,9 +86,9 @@ CREATE TABLE product_lines (
 );
 
 CREATE TABLE milestones (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
-  product_line_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
+  product_line_id VARCHAR(128) NOT NULL,
   milestone_key VARCHAR(100) NOT NULL,
   milestone_name VARCHAR(255) NOT NULL,
   stage_order INT NOT NULL,
@@ -115,7 +115,7 @@ CREATE TABLE milestones (
   accepted_by VARCHAR(160) NULL,
   accepted_at TIMESTAMP NULL,
   assembly_sub_tabs JSON NULL,
-  last_updated_by CHAR(36) NULL,
+  last_updated_by VARCHAR(128) NULL,
   last_updated_at TIMESTAMP NULL,
   UNIQUE KEY uq_milestones_line_key (product_line_id, milestone_key),
   KEY idx_milestones_line_order (product_line_id, stage_order),
@@ -124,9 +124,9 @@ CREATE TABLE milestones (
 );
 
 CREATE TABLE materials (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
-  product_line_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
+  product_line_id VARCHAR(128) NOT NULL,
   item_code VARCHAR(120) NOT NULL,
   description VARCHAR(255) NOT NULL,
   quantity DECIMAL(14, 3) NOT NULL,
@@ -141,21 +141,21 @@ CREATE TABLE materials (
   grn_number VARCHAR(160) NULL,
   inspection_result VARCHAR(40) NULL,
   inspection_notes TEXT NULL,
-  updated_by CHAR(36) NULL,
+  updated_by VARCHAR(128) NULL,
   updated_at TIMESTAMP NULL,
   CONSTRAINT fk_materials_organization FOREIGN KEY (organization_id) REFERENCES organizations(id),
   CONSTRAINT fk_materials_line FOREIGN KEY (product_line_id) REFERENCES product_lines(id) ON DELETE CASCADE
 );
 
 CREATE TABLE baseline_revisions (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
-  purchase_order_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
+  purchase_order_id VARCHAR(128) NOT NULL,
   revision_number INT NOT NULL,
   reason TEXT NOT NULL,
   document_reference VARCHAR(160) NOT NULL,
-  requested_by CHAR(36) NULL,
-  approved_by CHAR(36) NULL,
+  requested_by VARCHAR(128) NULL,
+  approved_by VARCHAR(128) NULL,
   approved_at TIMESTAMP NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_revisions_order_number (purchase_order_id, revision_number),
@@ -164,10 +164,10 @@ CREATE TABLE baseline_revisions (
 );
 
 CREATE TABLE baseline_revision_changes (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
-  baseline_revision_id CHAR(36) NOT NULL,
-  product_line_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
+  baseline_revision_id VARCHAR(128) NOT NULL,
+  product_line_id VARCHAR(128) NOT NULL,
   milestone_key VARCHAR(100) NOT NULL,
   old_duration_days INT NOT NULL,
   new_duration_days INT NOT NULL,
@@ -179,8 +179,8 @@ CREATE TABLE baseline_revision_changes (
 );
 
 CREATE TABLE product_catalog (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
   product_code VARCHAR(120) NOT NULL,
   product_name VARCHAR(255) NOT NULL,
   category VARCHAR(160) NOT NULL,
@@ -193,9 +193,9 @@ CREATE TABLE product_catalog (
 );
 
 CREATE TABLE product_catalog_materials (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
-  product_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
+  product_id VARCHAR(128) NOT NULL,
   item_code VARCHAR(120) NOT NULL,
   description VARCHAR(255) NOT NULL,
   supplier_name VARCHAR(255) NOT NULL,
@@ -206,8 +206,8 @@ CREATE TABLE product_catalog_materials (
 );
 
 CREATE TABLE category_templates (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
   category_name VARCHAR(160) NOT NULL,
   design_type VARCHAR(40) NOT NULL,
   UNIQUE KEY uq_templates_org_category_design (organization_id, category_name, design_type),
@@ -215,9 +215,9 @@ CREATE TABLE category_templates (
 );
 
 CREATE TABLE category_template_milestones (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
-  template_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
+  template_id VARCHAR(128) NOT NULL,
   stage_order INT NOT NULL,
   milestone_key VARCHAR(100) NOT NULL,
   milestone_name VARCHAR(255) NOT NULL,
@@ -228,10 +228,10 @@ CREATE TABLE category_template_milestones (
 );
 
 CREATE TABLE rectification_actions (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
-  purchase_order_id CHAR(36) NULL,
-  product_line_id CHAR(36) NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
+  purchase_order_id VARCHAR(128) NULL,
+  product_line_id VARCHAR(128) NULL,
   po_number VARCHAR(80) NOT NULL,
   product_line_name VARCHAR(255) NOT NULL,
   milestone_key VARCHAR(100) NOT NULL,
@@ -244,7 +244,7 @@ CREATE TABLE rectification_actions (
   suggested_at TIMESTAMP NOT NULL,
   assigned_to VARCHAR(160) NOT NULL,
   status VARCHAR(40) NOT NULL,
-  decision_by CHAR(36) NULL,
+  decision_by VARCHAR(128) NULL,
   decision_at TIMESTAMP NULL,
   decision_notes TEXT NULL,
   CONSTRAINT fk_rectifications_organization FOREIGN KEY (organization_id) REFERENCES organizations(id),
@@ -254,7 +254,7 @@ CREATE TABLE rectification_actions (
 );
 
 CREATE TABLE system_config (
-  organization_id CHAR(36) PRIMARY KEY,
+  organization_id VARCHAR(128) PRIMARY KEY,
   at_risk_threshold_days INT NOT NULL DEFAULT 3,
   delayed_threshold_days INT NOT NULL DEFAULT 7,
   offline_sync_queue JSON NOT NULL,
@@ -264,10 +264,10 @@ CREATE TABLE system_config (
 );
 
 CREATE TABLE audit_logs (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
-  purchase_order_id CHAR(36) NULL,
-  user_id CHAR(36) NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
+  purchase_order_id VARCHAR(128) NULL,
+  user_id VARCHAR(128) NULL,
   po_number VARCHAR(80) NOT NULL,
   product_line VARCHAR(120) NULL,
   role VARCHAR(60) NOT NULL,
@@ -283,12 +283,12 @@ CREATE TABLE audit_logs (
 );
 
 CREATE TABLE subdivisions (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
-  milestone_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
+  milestone_id VARCHAR(128) NOT NULL,
   title VARCHAR(255) NOT NULL,
   owner_slot VARCHAR(100) NOT NULL,
-  owner_user_id CHAR(36) NULL,
+  owner_user_id VARCHAR(128) NULL,
   owner_label VARCHAR(160) NULL,
   status VARCHAR(40) NOT NULL,
   target_start DATE NULL,
@@ -306,10 +306,10 @@ CREATE TABLE subdivisions (
 );
 
 CREATE TABLE po_slot_assignments (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
-  purchase_order_id CHAR(36) NOT NULL,
-  user_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
+  purchase_order_id VARCHAR(128) NOT NULL,
+  user_id VARCHAR(128) NOT NULL,
   slot_role VARCHAR(100) NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_po_slot_assignment (purchase_order_id, slot_role, user_id),
@@ -319,9 +319,9 @@ CREATE TABLE po_slot_assignments (
 );
 
 CREATE TABLE cancellation_requests (
-  id CHAR(36) PRIMARY KEY,
-  organization_id CHAR(36) NOT NULL,
-  purchase_order_id CHAR(36) NOT NULL,
+  id VARCHAR(128) PRIMARY KEY,
+  organization_id VARCHAR(128) NOT NULL,
+  purchase_order_id VARCHAR(128) NOT NULL,
   po_number VARCHAR(80) NOT NULL,
   customer_name VARCHAR(255) NOT NULL,
   requested_by VARCHAR(160) NOT NULL,
