@@ -7,7 +7,7 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ onOpenTestsModal: _onOpenTestsModal }) => {
-  const { activeRole } = useApp();
+  const { activeRole, backendStatus } = useApp();
 
   return (
     <header className="h-14 bg-white border-b border-slate-200 px-6 flex items-center justify-between text-slate-800 select-none z-20 shadow-xs">
@@ -21,8 +21,26 @@ export const Header: React.FC<HeaderProps> = ({ onOpenTestsModal: _onOpenTestsMo
         </span>
       </div>
 
-      {/* Right Controls: Active Role Badge */}
+      {/* Right Controls: Backend Sync Badge + Active Role Badge */}
       <div className="flex items-center gap-3">
+        {/* Backend Connectivity Status */}
+        <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 shadow-2xs">
+          <span
+            className={`w-2 h-2 rounded-full ${
+              backendStatus === 'offline'
+                ? 'bg-amber-500 animate-pulse'
+                : 'bg-emerald-500 ring-2 ring-emerald-200'
+            }`}
+          />
+          <div className="flex flex-col">
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider leading-none">Backend API:</span>
+            <span className="text-xs font-semibold text-slate-700 leading-tight mt-0.5">
+              {backendStatus === 'offline' ? 'Offline Cache' : 'Live Connected'}
+            </span>
+          </div>
+        </div>
+
+        {/* Active Role Badge */}
         <div className="flex items-center gap-2.5 bg-emerald-50/80 border border-emerald-200 rounded-lg px-3.5 py-1.5 text-emerald-900 shadow-2xs">
           <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
           <div className="flex flex-col">
