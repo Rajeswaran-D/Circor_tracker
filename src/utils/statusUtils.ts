@@ -73,19 +73,19 @@ export function getPOManufacturingStatus(po: PurchaseOrder): POStatusSummary {
     // Check final milestone of line
     const lastMs = msList[msList.length - 1];
     const lastMsVar = lastMs ? Math.max(0, typeof lastMs.varianceDays === 'number' ? lastMs.varianceDays : 0) : 0;
-    const lastMsBaseEnd = lastMs?.committedBaselineEndDate || po.committedDeliveryDate;
-    const lastMsActualEnd = lastMs?.actualEndDate || lastMs?.forecastEndDate;
-    const lastMsDiff = (lastMsActualEnd && lastMsBaseEnd && lastMsActualEnd > lastMsBaseEnd)
-      ? getDaysDifference(lastMsBaseEnd, lastMsActualEnd)
+    const lastMsBaseEnd = po.committedDeliveryDate || lastMs?.committedBaselineEndDate;
+    const lastMsDiff = (lastMs?.actualEndDate && lastMsBaseEnd && lastMs.actualEndDate > lastMsBaseEnd)
+      ? getDaysDifference(lastMsBaseEnd, lastMs.actualEndDate)
       : 0;
 
     // Check last completed milestone
     const completedMsList = msList.filter(m => m.status === 'Completed' || Boolean(m.actualEndDate));
     const lastDone = completedMsList[completedMsList.length - 1];
     const lastDoneVar = lastDone ? Math.max(0, typeof lastDone.varianceDays === 'number' ? lastDone.varianceDays : 0) : 0;
+    const isFinalDone = lastDone && (lastDone.stageOrder === msList.length || lastDone.key === 'shipment');
     const lastDoneBaseEnd = lastDone?.committedBaselineEndDate;
     const lastDoneActualEnd = lastDone?.actualEndDate;
-    const lastDoneDiff = (lastDoneActualEnd && lastDoneBaseEnd && lastDoneActualEnd > lastDoneBaseEnd)
+    const lastDoneDiff = (isFinalDone && lastDoneActualEnd && lastDoneBaseEnd && lastDoneActualEnd > lastDoneBaseEnd)
       ? getDaysDifference(lastDoneBaseEnd, lastDoneActualEnd)
       : 0;
 

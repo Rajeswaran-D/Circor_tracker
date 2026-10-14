@@ -434,6 +434,107 @@ function normalizeHeader(raw: string): string {
 }
 
 /**
+ * Computes a strictly chronological, contiguous baseline schedule respecting all explicit planned dates from Excel
+ * while smoothly interpolating unrecorded intermediate stages based on their standard durations.
+ */
+export function computeAlignedBaselineDates(
+  poStartDate: string,
+  targetDeliveryDate: string | undefined,
+  milestoneKeys: string[],
+  explicitPlannedEnds: (string | undefined)[],
+  standardDurations: number[]
+): { start: string; end: string; duration: number }[] {
+  const n = milestoneKeys.length;
+  const result: { start: string; end: string; duration: number }[] = [];
+
+  // 1. Establish known anchor points
+  const anchors: (string | undefined)[] = [...explicitPlannedEnds];
+
+  // Stage 0 always anchors at poStartDate
+  if (!anchors[0]) {
+    anchors[0] = poStartDate;
+  }
+
+  // Final stage anchors at targetDeliveryDate if not explicitly provided in Excel
+  if (!anchors[n - 1] && targetDeliveryDate) {
+    anchors[n - 1] = targetDeliveryDate;
+  }
+
+  // 2. Identify all fixed anchor indices
+  const fixedIndices: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (anchors[i]) {
+      fixedIndices.push(i);
+    }
+  }
+
+  // Ensure chronological order of anchors (if an entered date is inverted, clamp forward)
+  for (let k = 1; k < fixedIndices.length; k++) {
+    const prevIdx = fixedIndices[k - 1];
+    const currIdx = fixedIndices[k];
+    const prevDate = anchors[prevIdx]!;
+    const currDate = anchors[currIdx]!;
+    const minDays = currIdx - prevIdx;
+    if (getDaysDifference(prevDate, currDate) < minDays) {
+      anchors[currIdx] = addDays(prevDate, minDays);
+    }
+  }
+
+  // 3. Interpolate planned end dates for intermediate milestones between each pair of fixed anchors
+  const plannedEnds: string[] = new Array(n);
+  for (let k = 0; k < fixedIndices.length; k++) {
+    plannedEnds[fixedIndices[k]] = anchors[fixedIndices[k]]!;
+  }
+
+  for (let k = 0; k < fixedIndices.length - 1; k++) {
+    const idxA = fixedIndices[k];
+    const idxB = fixedIndices[k + 1];
+    const dateA = plannedEnds[idxA];
+    const dateB = plannedEnds[idxB];
+    const count = idxB - idxA;
+
+    if (count > 1) {
+      // There are intermediate milestones between idxA and idxB
+      const totalSpanDays = Math.max(count, getDaysDifference(dateA, dateB));
+      const subDurations = standardDurations.slice(idxA + 1, idxB + 1);
+      const totalStdDays = subDurations.reduce((sum, d) => sum + d, 0) || 1;
+
+      let allocatedDays = 0;
+      for (let step = 1; step < count; step++) {
+        const currIdx = idxA + step;
+        const stdD = standardDurations[currIdx] || 1;
+        const remainingSteps = count - step;
+        const remainingSpan = totalSpanDays - allocatedDays;
+        const targetShare = Math.round((stdD / totalStdDays) * totalSpanDays);
+        const daysForThis = Math.max(1, Math.min(targetShare, remainingSpan - remainingSteps));
+        allocatedDays += daysForThis;
+        plannedEnds[currIdx] = addDays(dateA, allocatedDays);
+      }
+    }
+  }
+
+  // 4. Construct strictly contiguous start and end dates
+  let prevEnd = poStartDate;
+  for (let i = 0; i < n; i++) {
+    const end = plannedEnds[i];
+    let start: string;
+    if (i === 0) {
+      start = poStartDate;
+    } else {
+      start = addDays(prevEnd, 1);
+      if (start > end) {
+        start = end;
+      }
+    }
+    const duration = Math.max(1, getDaysDifference(start, end) + 1);
+    result.push({ start, end, duration });
+    prevEnd = end;
+  }
+
+  return result;
+}
+
+/**
  * Main parser and validator function for CSV imports.
  */
 export function parseAndValidateCsv(
@@ -547,6 +648,10 @@ export function parseAndValidateCsv(
   const categoryIdx = getColIdx(['Category', 'Product Category']);
   const designTypeIdx = getColIdx(['Design Type', 'Design']);
   const qtyIdx = getColIdx(['Quantity', 'Qty', 'Quantity (Nos)', 'Nos']);
+  const statusIdx = getColIdx([
+    'Shippment status', 'Shipment status', 'Shipment Status', 'Shippment Status',
+    'Order Status', 'OrderStatus', 'PO Status', 'Status', 'Current Status', 'Stage Status', 'State'
+  ]);
 
   // Stage 7 Raw Material Specific Column Indices
   const matOrderDateIdx = getColIdx(['S7_MaterialOrderDate', 'S7_MaterialOrderedDate', 'S7_MaterialOrder_Actual', 'Material Order Date', 'Material Ordered Date', 'S7_OrderDate']);
@@ -599,13 +704,13 @@ export function parseAndValidateCsv(
       ...(s.stage === 5 ? ['S5_WORelease_Planned', 'Work Order Release Planned', 'WO Release Planned', 'Work Order Planned', 'WO Planned', 'PO - Long Leads Planned', 'Long Lead PO Planned'] : []),
       ...(s.stage === 6 ? ['S6_SubSupplierPO_Planned', 'Sub-Supplier PO Planned', 'Sub Supplier PO Planned', 'PO Planned'] : []),
       ...(s.stage === 7 ? ['S7_MaterialReceipt_Planned', 'Material Receipts Planned', 'Material Receipt Planned', 'Mat\'l receipt Planned', 'Material Expected Date', 'S7_MaterialExpectedDate', 'GRN Planned'] : []),
-      ...(s.stage === 8 ? ['S8_Machining_Planned', 'Machining Planned', 'Machining Plan', 'Machining Target'] : []),
+      ...(s.stage === 8 ? ['S8_Machining_Planned', 'Machining Planned', 'Machining Plan', 'Machining Target', 'Lead Time  for Inhouse process', 'Lead Time for Inhouse process', 'Inhouse process'] : []),
       ...(s.stage === 9 ? ['S9_Assembly_Planned', 'Assembly Planned', 'Assembly Plan', 'Assembly Target'] : []),
       ...(s.stage === 10 ? ['S10_FG_Planned', 'FG Planned', 'Finished Goods Planned', 'FG Target'] : []),
       ...(s.stage === 11 ? ['S11_Inspection_Planned', 'Customer Inspection Planned', 'Inspection Planned', 'Customer Inspection Target'] : []),
       ...(s.stage === 12 ? ['S12_Painting_Planned', 'Painting Planned', 'Painting Plan', 'Painting Target'] : []),
       ...(s.stage === 13 ? ['S13_TRN_Planned', 'TRN Planned', 'Test Report Notice Planned', 'TRN Target'] : []),
-      ...(s.stage === 14 ? ['S14_Shipment_Planned', 'Packing & Dispatch Planned', 'Packing / Shipping Planned', 'Shipment Planned', 'Dispatch Planned', 'Final Shipment Planned', 'Target Delivery Date', 'Promised Date', 'COTD'] : [])
+      ...(s.stage === 14 ? ['S14_Shipment_Planned', 'Packing & Dispatch Planned', 'Packing & Dispatch Plan', 'Packing / Shipping Planned', 'Packing / Shipping Plan', 'Shipment Planned', 'Dispatch Planned', 'Final Shipment Planned', 'Target Delivery Date', 'Promised Date', 'COTD'] : [])
     ]);
 
     // 3. Explicit delay column detection (in days)
@@ -677,6 +782,7 @@ export function parseAndValidateCsv(
     matReceivedDate?: string;
     inspectionResult?: 'Passed' | 'Rejected' | 'Pending';
     remarks?: string;
+    orderStatus?: string;
     errors: string[];
     warnings: string[];
   }
@@ -744,6 +850,7 @@ export function parseAndValidateCsv(
       'Passed';
 
     const rawRemarks = remarksIdx !== -1 ? row[remarksIdx]?.trim() : '';
+    const rawStatus = statusIdx !== -1 ? row[statusIdx]?.trim() : '';
 
     if (!poNumber) {
       rowErrors.push(`Row #${rowNum}: Missing PO Number.`);
@@ -846,6 +953,18 @@ export function parseAndValidateCsv(
       }
     });
 
+    // Check explicit status string for active operational alignment
+    const statusNorm = rawStatus.toLowerCase();
+    if (statusNorm.includes('shipped') || statusNorm.includes('delivered') || statusNorm.includes('dispatched')) {
+      maxCompletedIndex = 13;
+    } else if (statusNorm.includes('in assembly') || statusNorm.includes('assembly')) {
+      maxCompletedIndex = Math.max(maxCompletedIndex, 7); // Stage 8 Machining completed/bridged into Assembly
+    } else if (statusNorm.includes('pending material') || statusNorm.includes('awaiting material')) {
+      maxCompletedIndex = Math.max(maxCompletedIndex, 5); // Stage 7 Material Receipt actively pending
+    } else if (statusNorm.includes('in machining') || statusNorm.includes('machining')) {
+      maxCompletedIndex = Math.max(maxCompletedIndex, 6); // Stage 8 Machining active
+    }
+
     const effectiveCompletedCount = maxCompletedIndex >= 0 ? maxCompletedIndex + 1 : (poDate ? 1 : 0);
 
     let currentActiveStageName = '1. Customer Purchase Order (PO)';
@@ -916,6 +1035,7 @@ export function parseAndValidateCsv(
         matReceivedDate: stageActualDates['material_receipt'] || undefined,
         inspectionResult: rawInspection ? parsedInspection : (stageActualDates['material_receipt'] ? 'Passed' : 'Pending'),
         remarks: rawRemarks || undefined,
+        orderStatus: rawStatus || undefined,
         errors: rowErrors,
         warnings: rowWarnings
       });
@@ -997,6 +1117,20 @@ export function parseAndValidateCsv(
         targetEndDate: group.deliveryDate
       });
 
+      // Extract explicit planned ends for all 14 stages from Excel (if provided)
+      const explicitPlannedEnds = baseMilestones.map(m => rawLine.stagePlannedDates[m.key]);
+      const milestoneKeys = baseMilestones.map(m => m.key);
+      const standardDurations = baseMilestones.map(m => m.committedDurationDays || 1);
+
+      // Compute strictly monotonic, gapless, valid baseline schedule respecting all Excel planned dates
+      const alignedBaselines = computeAlignedBaselineDates(
+        effectivePoDate,
+        group.deliveryDate,
+        milestoneKeys,
+        explicitPlannedEnds,
+        standardDurations
+      );
+
       // Determine the highest milestone index that has an explicit actual completion date
       let maxCompletedIndex = -1;
       baseMilestones.forEach((m, idx) => {
@@ -1005,51 +1139,56 @@ export function parseAndValidateCsv(
         }
       });
 
+      // If an explicit operational status is provided in Excel, align maxCompletedIndex
+      const orderStatusNorm = (rawLine.orderStatus || '').toLowerCase();
+      if (orderStatusNorm.includes('shipped') || orderStatusNorm.includes('delivered') || orderStatusNorm.includes('dispatched')) {
+        maxCompletedIndex = baseMilestones.length - 1;
+      } else if (orderStatusNorm.includes('in assembly') || orderStatusNorm.includes('assembly')) {
+        maxCompletedIndex = Math.max(maxCompletedIndex, 7); // stages 0..7 (up to Machining) completed/bridged
+      } else if (orderStatusNorm.includes('pending material') || orderStatusNorm.includes('awaiting material')) {
+        maxCompletedIndex = Math.max(maxCompletedIndex, 5); // stages 0..5 completed, Stage 7 active
+      } else if (orderStatusNorm.includes('in machining') || orderStatusNorm.includes('machining')) {
+        maxCompletedIndex = Math.max(maxCompletedIndex, 6); // stages 0..6 completed, Stage 8 active
+      } else if (orderStatusNorm.includes('in inspection') || orderStatusNorm.includes('inspection')) {
+        maxCompletedIndex = Math.max(maxCompletedIndex, 9); // Stage 11 active
+      } else if (orderStatusNorm.includes('in painting') || orderStatusNorm.includes('painting')) {
+        maxCompletedIndex = Math.max(maxCompletedIndex, 10); // Stage 12 active
+      } else if (orderStatusNorm.includes('in trn') || orderStatusNorm.includes('trn')) {
+        maxCompletedIndex = Math.max(maxCompletedIndex, 11); // Stage 13 active
+      } else if (orderStatusNorm.includes('in packing') || orderStatusNorm.includes('packing')) {
+        maxCompletedIndex = Math.max(maxCompletedIndex, 12); // Stage 14 active
+      }
+
       // Apply historical completion dates, bridge omitted stages, and activate the real live stage
-      let foundFirstPending = false;
       let runningChainDate = effectivePoDate;
-      let runningBaselineEnd = effectivePoDate;
 
       const configuredMilestones: Milestone[] = baseMilestones.map((m, mIdx) => {
         const actualEnd = rawLine.stageActualDates[m.key];
-        const importedPlannedEnd = rawLine.stagePlannedDates[m.key];
         const excelDelay = rawLine.stageDelays[m.key];
-        const isPredecessorOfCompleted = mIdx < maxCompletedIndex;
+        const isCompleted = mIdx <= maxCompletedIndex;
+        const isActiveStage = mIdx === maxCompletedIndex + 1;
 
-        // Effective planned end date for this stage (from Excel if provided, or from baseline template)
-        const effectivePlannedEnd = importedPlannedEnd || m.committedBaselineEndDate;
-        let baselineStart = mIdx === 0
-          ? effectivePoDate
-          : (m.committedBaselineStartDate && m.committedBaselineStartDate >= runningBaselineEnd
-              ? m.committedBaselineStartDate
-              : addDays(runningBaselineEnd, 1));
-
-        if (baselineStart > effectivePlannedEnd) {
-          baselineStart = effectivePlannedEnd;
-        }
-        runningBaselineEnd = effectivePlannedEnd;
-
-        const baselineDuration = Math.max(1, getDaysDifference(baselineStart, effectivePlannedEnd) + 1);
-
-        const stageCrossingLine = (m.key === 'material_receipt' && (effectiveMatExpectedDate || importedPlannedEnd))
-          ? (effectiveMatExpectedDate || importedPlannedEnd)
-          : effectivePlannedEnd;
+        const alignedBase = alignedBaselines[mIdx];
+        const baselineStart = alignedBase.start;
+        const effectivePlannedEnd = alignedBase.end;
+        const baselineDuration = alignedBase.duration;
 
         let delayReason = m.delayReason;
         let delayCategory = m.delayCategory;
         let varianceDays = 0;
 
-        if (actualEnd) {
-          // Explicitly completed milestone
+        if (actualEnd || isCompleted) {
+          // Completed milestone (either explicitly dated in Excel or auto-bridged operational predecessor)
+          const isExplicit = Boolean(actualEnd);
+          const effectiveActualEnd = actualEnd || runningChainDate;
           const actualStart = (m.key === 'material_receipt' && effectiveMatOrderDate)
             ? effectiveMatOrderDate
-            : (runningChainDate <= actualEnd ? runningChainDate : actualEnd);
-          runningChainDate = actualEnd;
+            : (runningChainDate <= effectiveActualEnd ? runningChainDate : effectiveActualEnd);
+          runningChainDate = effectiveActualEnd;
 
-          // Check planned and actual dates for delay calculation:
           let calculatedDelay = 0;
-          if (stageCrossingLine && actualEnd > stageCrossingLine) {
-            calculatedDelay = getDaysDifference(stageCrossingLine, actualEnd);
+          if (effectivePlannedEnd && effectiveActualEnd > effectivePlannedEnd) {
+            calculatedDelay = getDaysDifference(effectivePlannedEnd, effectiveActualEnd);
           }
           const effectiveDelay = Math.max(calculatedDelay, excelDelay !== undefined && excelDelay > 0 ? excelDelay : 0);
 
@@ -1057,46 +1196,7 @@ export function parseAndValidateCsv(
             varianceDays = effectiveDelay;
             delayReason = (rawLine.remarks && rawLine.remarks.trim())
               ? rawLine.remarks.trim()
-              : `${m.name} delayed by +${effectiveDelay}d (Planned: ${stageCrossingLine}, Actual: ${actualEnd})`;
-            delayCategory = getDelayCategoryForMilestone(m.key);
-          } else {
-            varianceDays = 0;
-            delayReason = undefined;
-            delayCategory = undefined;
-          }
-
-          return {
-            ...m,
-            committedBaselineStartDate: baselineStart,
-            committedBaselineEndDate: effectivePlannedEnd,
-            committedDurationDays: baselineDuration,
-            actualStartDate: actualStart,
-            actualEndDate: actualEnd,
-            forecastStartDate: actualStart,
-            forecastEndDate: actualEnd,
-            status: 'Completed' as MilestoneStatus,
-            completionPct: 100,
-            varianceDays,
-            delayReason,
-            delayCategory,
-            docRef: m.key === 'po_from_customer' ? 'PO-INTAKE' : 'LEGACY-IMPORT'
-          };
-        } else if (isPredecessorOfCompleted) {
-          // Omitted intermediate milestone in spreadsheet (e.g. Stage 2 PM Review or Stage 5 WO Release)
-          const actualStart = runningChainDate;
-          const actualEnd = runningChainDate; // seamless handover
-
-          let calculatedDelay = 0;
-          if (stageCrossingLine && actualEnd > stageCrossingLine) {
-            calculatedDelay = getDaysDifference(stageCrossingLine, actualEnd);
-          }
-          const effectiveDelay = Math.max(calculatedDelay, excelDelay !== undefined && excelDelay > 0 ? excelDelay : 0);
-
-          if (effectiveDelay > 0) {
-            varianceDays = effectiveDelay;
-            delayReason = (rawLine.remarks && rawLine.remarks.trim())
-              ? rawLine.remarks.trim()
-              : `${m.name} delayed by +${effectiveDelay}d`;
+              : `${m.name} delayed by +${effectiveDelay}d (Planned: ${effectivePlannedEnd}, Actual: ${effectiveActualEnd})`;
             delayCategory = getDelayCategoryForMilestone(m.key);
           }
 
@@ -1106,26 +1206,29 @@ export function parseAndValidateCsv(
             committedBaselineEndDate: effectivePlannedEnd,
             committedDurationDays: baselineDuration,
             actualStartDate: actualStart,
-            actualEndDate: actualEnd,
+            actualEndDate: effectiveActualEnd,
             forecastStartDate: actualStart,
-            forecastEndDate: actualEnd,
+            forecastEndDate: effectiveActualEnd,
             status: 'Completed' as MilestoneStatus,
             completionPct: 100,
             varianceDays,
             delayReason,
             delayCategory,
-            docRef: 'AUTO-BRIDGED'
+            docRef: m.key === 'po_from_customer' ? 'PO-INTAKE' : (isExplicit ? 'LEGACY-IMPORT' : 'AUTO-BRIDGED')
           };
-        } else if (m.key === 'material_receipt' && effectiveMatOrderDate && !actualEnd) {
-          // Stage 7 actively waiting for material arrival
-          foundFirstPending = true;
-          const stageStart = effectiveMatOrderDate;
-          const stageForecastEnd = effectiveMatExpectedDate || importedPlannedEnd || addDays(stageStart, m.committedDurationDays - 1);
+        } else if (isActiveStage) {
+          // Active in-progress milestone
+          const stageStart = (m.key === 'material_receipt' && effectiveMatOrderDate)
+            ? effectiveMatOrderDate
+            : runningChainDate;
+          const stageForecastEnd = (m.key === 'material_receipt' && effectiveMatExpectedDate)
+            ? effectiveMatExpectedDate
+            : addDays(stageStart, baselineDuration - 1);
           runningChainDate = addDays(stageForecastEnd, 1);
 
           let calculatedDelay = 0;
-          if (stageCrossingLine && stageForecastEnd > stageCrossingLine) {
-            calculatedDelay = getDaysDifference(stageCrossingLine, stageForecastEnd);
+          if (effectivePlannedEnd && stageForecastEnd > effectivePlannedEnd) {
+            calculatedDelay = getDaysDifference(effectivePlannedEnd, stageForecastEnd);
           }
           const effectiveDelay = Math.max(calculatedDelay, excelDelay !== undefined && excelDelay > 0 ? excelDelay : 0);
 
@@ -1133,46 +1236,7 @@ export function parseAndValidateCsv(
             varianceDays = effectiveDelay;
             delayReason = (rawLine.remarks && rawLine.remarks.trim())
               ? rawLine.remarks.trim()
-              : `${m.name} expected delivery delayed by +${effectiveDelay}d`;
-            delayCategory = 'Supplier';
-          }
-
-          return {
-            ...m,
-            committedBaselineStartDate: baselineStart,
-            committedBaselineEndDate: effectivePlannedEnd,
-            committedDurationDays: baselineDuration,
-            actualStartDate: stageStart,
-            forecastStartDate: stageStart,
-            forecastEndDate: stageForecastEnd,
-            status: (effectiveDelay > 3 ? 'Delayed' : (effectiveDelay > 0 ? 'At Risk' : 'In Progress')) as MilestoneStatus,
-            completionPct: 50,
-            varianceDays,
-            delayReason,
-            delayCategory
-          };
-        } else if (!foundFirstPending && mIdx > maxCompletedIndex) {
-          // First active/in-progress milestone after all completed stages
-          foundFirstPending = true;
-          const stageStart = runningChainDate || todayStr;
-          const stageForecastEnd = addDays(stageStart, m.committedDurationDays - 1);
-          runningChainDate = addDays(stageForecastEnd, 1);
-
-          let calculatedDelay = 0;
-          if (stageCrossingLine) {
-            if (stageForecastEnd > stageCrossingLine) {
-              calculatedDelay = getDaysDifference(stageCrossingLine, stageForecastEnd);
-            } else if (todayStr > stageCrossingLine) {
-              calculatedDelay = getDaysDifference(stageCrossingLine, todayStr);
-            }
-          }
-          const effectiveDelay = Math.max(calculatedDelay, excelDelay !== undefined && excelDelay > 0 ? excelDelay : 0);
-
-          if (effectiveDelay > 0) {
-            varianceDays = effectiveDelay;
-            delayReason = (rawLine.remarks && rawLine.remarks.trim())
-              ? rawLine.remarks.trim()
-              : `${m.name} delayed by +${effectiveDelay}d vs planned target (${stageCrossingLine})`;
+              : `${m.name} delayed by +${effectiveDelay}d vs planned target (${effectivePlannedEnd})`;
             delayCategory = getDelayCategoryForMilestone(m.key);
           }
 
@@ -1185,20 +1249,20 @@ export function parseAndValidateCsv(
             forecastStartDate: stageStart,
             forecastEndDate: stageForecastEnd,
             status: (effectiveDelay > 3 ? 'Delayed' : (effectiveDelay > 0 ? 'At Risk' : 'In Progress')) as MilestoneStatus,
-            completionPct: 25,
+            completionPct: 30,
             varianceDays,
             delayReason,
             delayCategory
           };
         } else {
-          // Subsequent future pending stages
+          // Future pending stages: STRICTLY NO actualStartDate!
           const stageStart = runningChainDate;
-          const stageForecastEnd = addDays(stageStart, m.committedDurationDays - 1);
+          const stageForecastEnd = addDays(stageStart, baselineDuration - 1);
           runningChainDate = addDays(stageForecastEnd, 1);
 
           let calculatedDelay = 0;
-          if (stageCrossingLine && stageForecastEnd > stageCrossingLine) {
-            calculatedDelay = getDaysDifference(stageCrossingLine, stageForecastEnd);
+          if (effectivePlannedEnd && stageForecastEnd > effectivePlannedEnd) {
+            calculatedDelay = getDaysDifference(effectivePlannedEnd, stageForecastEnd);
           }
           const effectiveDelay = Math.max(calculatedDelay, excelDelay !== undefined && excelDelay > 0 ? excelDelay : 0);
 
@@ -1215,6 +1279,8 @@ export function parseAndValidateCsv(
             committedBaselineStartDate: baselineStart,
             committedBaselineEndDate: effectivePlannedEnd,
             committedDurationDays: baselineDuration,
+            actualStartDate: undefined,
+            actualEndDate: undefined,
             forecastStartDate: stageStart,
             forecastEndDate: stageForecastEnd,
             status: 'Not Started' as MilestoneStatus,
