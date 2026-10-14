@@ -23,6 +23,49 @@ const __dirname = path.dirname(__filename);
 export const DEFAULT_ORG_ID = 'circor-flow-technologies';
 
 /**
+ * Safely formats any database date value (string, Date object, or legacy truncated string)
+ * into a canonical YYYY-MM-DD calendar string. Never truncates Date.toString()
+ * into broken day-names (e.g. "Wed Oct 14").
+ */
+export function formatDbDate(val: any): string {
+  if (!val) return '';
+  if (val instanceof Date) {
+    if (isNaN(val.getTime())) return '';
+    const y = val.getUTCFullYear();
+    const m = String(val.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(val.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const str = String(val).trim();
+  if (!str) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    return str;
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
+    return str.slice(0, 10);
+  }
+  // If string has format like "Wed Oct 14" without a 4-digit year:
+  if (/^[A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}$/.test(str)) {
+    const currentYear = new Date().getFullYear();
+    const withYear = `${str} ${currentYear}`;
+    const p = new Date(withYear);
+    if (!isNaN(p.getTime())) {
+      const m = String(p.getMonth() + 1).padStart(2, '0');
+      const d = String(p.getDate()).padStart(2, '0');
+      return `${currentYear}-${m}-${d}`;
+    }
+  }
+  const parsed = new Date(val);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return str.slice(0, 10);
+}
+
+/**
  * Ensures the target organization exists in the organizations table.
  */
 export async function ensureOrganization(conn: PoolConnection, orgId: string, orgName?: string): Promise<void> {
@@ -130,10 +173,10 @@ export async function saveOrdersToDb(pool: Pool, orgId: string, orders: Purchase
     for (const po of orders) {
       if (!po.id || !po.poNumber) continue;
 
-      const poDate = po.poDate ? po.poDate.slice(0, 10) : new Date().toISOString().slice(0, 10);
-      const committedDate = po.committedDeliveryDate ? po.committedDeliveryDate.slice(0, 10) : poDate;
-      const revisedDate = po.revisedDeliveryDate ? po.revisedDeliveryDate.slice(0, 10) : committedDate;
-      const actualDeliveryDate = po.actualDeliveryDate ? po.actualDeliveryDate.slice(0, 10) : null;
+      const poDate = formatDbDate(po.poDate) || new Date().toISOString().slice(0, 10);
+      const committedDate = formatDbDate(po.committedDeliveryDate) || poDate;
+      const revisedDate = formatDbDate(po.revisedDeliveryDate) || committedDate;
+      const actualDeliveryDate = po.actualDeliveryDate ? formatDbDate(po.actualDeliveryDate) : null;
       const bookedAmount = typeof po.bookedAmount === 'number' ? po.bookedAmount : null;
 
       await conn.query(
@@ -241,12 +284,12 @@ export async function saveOrdersToDb(pool: Pool, orgId: string, orders: Purchase
             for (const ms of line.milestones) {
               if (!ms.id || !ms.key) continue;
 
-              const bStart = ms.committedBaselineStartDate ? ms.committedBaselineStartDate.slice(0, 10) : poDate;
-              const bEnd = ms.committedBaselineEndDate ? ms.committedBaselineEndDate.slice(0, 10) : committedDate;
-              const fStart = ms.forecastStartDate ? ms.forecastStartDate.slice(0, 10) : bStart;
-              const fEnd = ms.forecastEndDate ? ms.forecastEndDate.slice(0, 10) : bEnd;
-              const aStart = ms.actualStartDate ? ms.actualStartDate.slice(0, 10) : null;
-              const aEnd = ms.actualEndDate ? ms.actualEndDate.slice(0, 10) : null;
+              const bStart = formatDbDate(ms.committedBaselineStartDate) || poDate;
+              const bEnd = formatDbDate(ms.committedBaselineEndDate) || committedDate;
+              const fStart = formatDbDate(ms.forecastStartDate) || bStart;
+              const fEnd = formatDbDate(ms.forecastEndDate) || bEnd;
+              const aStart = ms.actualStartDate ? formatDbDate(ms.actualStartDate) : null;
+              const aEnd = ms.actualEndDate ? formatDbDate(ms.actualEndDate) : null;
 
               await conn.query(
                 `INSERT INTO milestones (
@@ -344,10 +387,10 @@ export async function saveOrdersToDb(pool: Pool, orgId: string, orders: Purchase
                       sub.ownerUserId || null,
                       sub.ownerLabel || null,
                       sub.status || 'Not Started',
-                      sub.targetStart ? sub.targetStart.slice(0, 10) : null,
-                      sub.targetEnd ? sub.targetEnd.slice(0, 10) : null,
-                      sub.actualStart ? sub.actualStart.slice(0, 10) : null,
-                      sub.actualEnd ? sub.actualEnd.slice(0, 10) : null,
+                      sub.targetStart ? formatDbDate(sub.targetStart) : null,
+                      sub.targetEnd ? formatDbDate(sub.targetEnd) : null,
+                      sub.actualStart ? formatDbDate(sub.actualStart) : null,
+                      sub.actualEnd ? formatDbDate(sub.actualEnd) : null,
                       sub.delayCause || null,
                       sub.delayNote || null
                     ]
@@ -393,10 +436,10 @@ export async function saveOrdersToDb(pool: Pool, orgId: string, orders: Purchase
                   mat.supplierName || '',
                   mat.leadTimeDays || 14,
                   Boolean(mat.isCriticalPath),
-                  mat.orderedDate ? mat.orderedDate.slice(0, 10) : null,
-                  mat.expectedDate ? mat.expectedDate.slice(0, 10) : null,
-                  mat.dispatchedDate ? mat.dispatchedDate.slice(0, 10) : null,
-                  mat.receivedDate ? mat.receivedDate.slice(0, 10) : null,
+                  mat.orderedDate ? formatDbDate(mat.orderedDate) : null,
+                  mat.expectedDate ? formatDbDate(mat.expectedDate) : null,
+                  mat.dispatchedDate ? formatDbDate(mat.dispatchedDate) : null,
+                  mat.receivedDate ? formatDbDate(mat.receivedDate) : null,
                   mat.grnNumber || null,
                   mat.inspectionResult || 'Pending',
                   mat.inspectionNotes || null
@@ -458,8 +501,8 @@ export async function saveOrdersToDb(pool: Pool, orgId: string, orders: Purchase
                   ch.milestoneKey,
                   ch.oldDuration ?? 0,
                   ch.newDuration ?? 0,
-                  ch.oldBaselineEnd ? ch.oldBaselineEnd.slice(0, 10) : poDate,
-                  ch.newBaselineEnd ? ch.newBaselineEnd.slice(0, 10) : committedDate
+                  ch.oldBaselineEnd ? formatDbDate(ch.oldBaselineEnd) : poDate,
+                  ch.newBaselineEnd ? formatDbDate(ch.newBaselineEnd) : committedDate
                 ]
               );
             }
@@ -551,14 +594,14 @@ export async function loadOrdersFromDb(pool: Pool, orgId: string): Promise<Purch
             name: m.milestone_name,
             stageOrder: Number(m.stage_order),
             defaultDurationDays: Number(m.default_duration_days),
-            committedBaselineStartDate: m.committed_baseline_start_date ? String(m.committed_baseline_start_date).slice(0, 10) : '',
-            committedBaselineEndDate: m.committed_baseline_end_date ? String(m.committed_baseline_end_date).slice(0, 10) : '',
-            currentBaselineEndDate: m.current_baseline_end_date ? String(m.current_baseline_end_date).slice(0, 10) : undefined,
+            committedBaselineStartDate: formatDbDate(m.committed_baseline_start_date),
+            committedBaselineEndDate: formatDbDate(m.committed_baseline_end_date),
+            currentBaselineEndDate: m.current_baseline_end_date ? formatDbDate(m.current_baseline_end_date) : undefined,
             committedDurationDays: Number(m.committed_duration_days),
-            actualStartDate: m.actual_start_date ? String(m.actual_start_date).slice(0, 10) : undefined,
-            actualEndDate: m.actual_end_date ? String(m.actual_end_date).slice(0, 10) : undefined,
-            forecastStartDate: m.forecast_start_date ? String(m.forecast_start_date).slice(0, 10) : '',
-            forecastEndDate: m.forecast_end_date ? String(m.forecast_end_date).slice(0, 10) : '',
+            actualStartDate: m.actual_start_date ? formatDbDate(m.actual_start_date) : undefined,
+            actualEndDate: m.actual_end_date ? formatDbDate(m.actual_end_date) : undefined,
+            forecastStartDate: formatDbDate(m.forecast_start_date) || formatDbDate(m.committed_baseline_start_date),
+            forecastEndDate: formatDbDate(m.forecast_end_date) || formatDbDate(m.committed_baseline_end_date),
             varianceDays: Number(m.variance_days || 0),
             status: m.status,
             completionPct: Number(m.completion_pct || 0),
@@ -579,10 +622,10 @@ export async function loadOrdersFromDb(pool: Pool, orgId: string): Promise<Purch
               ownerUserId: s.owner_user_id || undefined,
               ownerLabel: s.owner_label || undefined,
               status: s.status,
-              targetStart: s.target_start ? String(s.target_start).slice(0, 10) : undefined,
-              targetEnd: s.target_end ? String(s.target_end).slice(0, 10) : undefined,
-              actualStart: s.actual_start ? String(s.actual_start).slice(0, 10) : undefined,
-              actualEnd: s.actual_end ? String(s.actual_end).slice(0, 10) : undefined,
+              targetStart: s.target_start ? formatDbDate(s.target_start) : undefined,
+              targetEnd: s.target_end ? formatDbDate(s.target_end) : undefined,
+              actualStart: s.actual_start ? formatDbDate(s.actual_start) : undefined,
+              actualEnd: s.actual_end ? formatDbDate(s.actual_end) : undefined,
               delayCause: s.delay_cause || undefined,
               delayNote: s.delay_note || undefined
             })) : undefined
@@ -598,10 +641,10 @@ export async function loadOrdersFromDb(pool: Pool, orgId: string): Promise<Purch
           supplierName: mat.supplier_name,
           leadTimeDays: Number(mat.lead_time_days),
           isCriticalPath: Boolean(mat.is_critical_path),
-          orderedDate: mat.ordered_date ? String(mat.ordered_date).slice(0, 10) : undefined,
-          expectedDate: mat.expected_date ? String(mat.expected_date).slice(0, 10) : undefined,
-          dispatchedDate: mat.dispatched_date ? String(mat.dispatched_date).slice(0, 10) : undefined,
-          receivedDate: mat.received_date ? String(mat.received_date).slice(0, 10) : undefined,
+          orderedDate: mat.ordered_date ? formatDbDate(mat.ordered_date) : undefined,
+          expectedDate: mat.expected_date ? formatDbDate(mat.expected_date) : undefined,
+          dispatchedDate: mat.dispatched_date ? formatDbDate(mat.dispatched_date) : undefined,
+          receivedDate: mat.received_date ? formatDbDate(mat.received_date) : undefined,
           grnNumber: mat.grn_number || undefined,
           inspectionResult: mat.inspection_result || 'Pending',
           inspectionNotes: mat.inspection_notes || undefined
@@ -681,8 +724,8 @@ export async function loadOrdersFromDb(pool: Pool, orgId: string): Promise<Purch
               milestoneKey: c.milestone_key,
               oldDuration: Number(c.old_duration_days),
               newDuration: Number(c.new_duration_days),
-              oldBaselineEnd: String(c.old_baseline_end_date).slice(0, 10),
-              newBaselineEnd: String(c.new_baseline_end_date).slice(0, 10)
+              oldBaselineEnd: formatDbDate(c.old_baseline_end_date),
+              newBaselineEnd: formatDbDate(c.new_baseline_end_date)
             }));
           } catch {}
           revisions.push({
@@ -702,12 +745,12 @@ export async function loadOrdersFromDb(pool: Pool, orgId: string): Promise<Purch
         poNumber: poRow.po_number,
         customerName: poRow.customer_name,
         customerPoRef: poRow.customer_po_ref,
-        poDate: String(poRow.po_date).slice(0, 10),
+        poDate: formatDbDate(poRow.po_date),
         bookedAmount: poRow.booked_amount !== null ? Number(poRow.booked_amount) : undefined,
         contractReviewRef: poRow.contract_review_ref,
-        committedDeliveryDate: String(poRow.committed_delivery_date).slice(0, 10),
-        revisedDeliveryDate: String(poRow.revised_delivery_date).slice(0, 10),
-        actualDeliveryDate: poRow.actual_delivery_date ? String(poRow.actual_delivery_date).slice(0, 10) : undefined,
+        committedDeliveryDate: formatDbDate(poRow.committed_delivery_date),
+        revisedDeliveryDate: formatDbDate(poRow.revised_delivery_date) || formatDbDate(poRow.committed_delivery_date),
+        actualDeliveryDate: poRow.actual_delivery_date ? formatDbDate(poRow.actual_delivery_date) : undefined,
         status: poRow.status,
         productLines,
         revisions,

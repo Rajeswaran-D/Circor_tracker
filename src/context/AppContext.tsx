@@ -245,6 +245,47 @@ const stripRecentlyDeleted = (orders: PurchaseOrder[]): PurchaseOrder[] => {
   return orders.filter(o => !deletedSet.has(o.id));
 };
 
+/**
+ * Ensures any date value (whether valid ISO YYYY-MM-DD, a Date object, or legacy truncated
+ * string like "Wed Oct 14") is converted safely to a strict YYYY-MM-DD calendar string.
+ */
+export function sanitizeDateStr(val: any, fallback?: string): string {
+  if (!val) return fallback || '';
+  if (val instanceof Date) {
+    if (isNaN(val.getTime())) return fallback || '';
+    const y = val.getUTCFullYear();
+    const m = String(val.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(val.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const str = String(val).trim();
+  if (!str) return fallback || '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    return str;
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
+    return str.slice(0, 10);
+  }
+  if (/^[A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}$/.test(str)) {
+    const currentYear = new Date().getFullYear();
+    const withYear = `${str} ${currentYear}`;
+    const p = new Date(withYear);
+    if (!isNaN(p.getTime())) {
+      const m = String(p.getMonth() + 1).padStart(2, '0');
+      const d = String(p.getDate()).padStart(2, '0');
+      return `${currentYear}-${m}-${d}`;
+    }
+  }
+  const parsed = new Date(val);
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return fallback || todayLocal();
+}
+
 const saveSharedState = async (key: string, value: unknown) => {
   const config = getStorageConfig();
   const endpoint = getSharedStateEndpoint(config);
@@ -478,9 +519,30 @@ function repairMilestonesTo14Aligned(
 }
 
 const normalizeMilestoneFlows = (orders: PurchaseOrder[], todayStr: string): PurchaseOrder[] => orders.map(po => {
+  const cleanPoDate = sanitizeDateStr(po.poDate, todayStr);
+  const cleanCommittedDate = sanitizeDateStr(po.committedDeliveryDate, cleanPoDate);
+  const cleanRevisedDate = sanitizeDateStr(po.revisedDeliveryDate, cleanCommittedDate);
+
   const recalculatedLines = po.productLines.map(line => {
-    const milestones = repairMilestonesTo14Aligned(line.milestones, po.poDate, line.id, po.committedDeliveryDate, line.materials);
-    const materials = normalizeMaterialDates(line.materials, todayStr);
+    const cleanMs = (line.milestones || []).map(m => ({
+      ...m,
+      committedBaselineStartDate: sanitizeDateStr(m.committedBaselineStartDate, cleanPoDate),
+      committedBaselineEndDate: sanitizeDateStr(m.committedBaselineEndDate, cleanCommittedDate),
+      actualStartDate: m.actualStartDate ? sanitizeDateStr(m.actualStartDate) : undefined,
+      actualEndDate: m.actualEndDate ? sanitizeDateStr(m.actualEndDate) : undefined,
+      forecastStartDate: sanitizeDateStr(m.forecastStartDate, cleanPoDate),
+      forecastEndDate: sanitizeDateStr(m.forecastEndDate, cleanCommittedDate),
+    }));
+    const cleanMats = (line.materials || []).map(mat => ({
+      ...mat,
+      orderedDate: mat.orderedDate ? sanitizeDateStr(mat.orderedDate) : undefined,
+      expectedDate: mat.expectedDate ? sanitizeDateStr(mat.expectedDate) : undefined,
+      dispatchedDate: mat.dispatchedDate ? sanitizeDateStr(mat.dispatchedDate) : undefined,
+      receivedDate: mat.receivedDate ? sanitizeDateStr(mat.receivedDate) : undefined,
+    }));
+
+    const milestones = repairMilestonesTo14Aligned(cleanMs, cleanPoDate, line.id, cleanCommittedDate, cleanMats);
+    const materials = normalizeMaterialDates(cleanMats, todayStr);
 
     const syncedLine = applyMaterialProgress({ ...line, materials, milestones });
     const { atRisk, delayed } = loadConfigThresholds();
@@ -505,8 +567,10 @@ const normalizeMilestoneFlows = (orders: PurchaseOrder[], todayStr: string): Pur
 
   return {
     ...po,
+    poDate: cleanPoDate,
+    committedDeliveryDate: cleanCommittedDate,
+    revisedDeliveryDate: (maxFinalForecast && maxFinalForecast > cleanCommittedDate) ? maxFinalForecast : cleanRevisedDate,
     productLines: recalculatedLines,
-    revisedDeliveryDate: (maxFinalForecast && maxFinalForecast > po.committedDeliveryDate) ? maxFinalForecast : po.committedDeliveryDate,
     status: po.isCancelled || po.status === 'Cancelled'
       ? 'Cancelled'
       : po.isClosed ? 'Closed' : stillPendingBaseline ? 'Baseline Pending' : getPurchaseOrderStatus(recalculatedLines, po.isClosed)

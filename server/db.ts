@@ -171,6 +171,7 @@ export async function getDbPool(): Promise<mysql.Pool | null> {
       connectTimeout: 20000,
       enableKeepAlive: true,
       keepAliveInitialDelay: 10000,
+      dateStrings: true,
       ...(dbConfig.ssl ? { ssl: dbConfig.ssl } : {})
     };
 

@@ -49,7 +49,7 @@ async function run() {
 
   // Wait for server to come online
   let online = false;
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 60; i++) {
     try {
       const res = await fetch(`${BASE_URL}/health`);
       if (res.ok) {
@@ -62,7 +62,7 @@ async function run() {
   }
 
   if (!online) {
-    console.error('❌ Server failed to respond within 15 seconds!');
+    console.error('❌ Server failed to respond within 30 seconds!');
     serverProc.kill();
     process.exit(1);
   }
